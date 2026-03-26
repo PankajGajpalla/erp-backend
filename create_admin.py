@@ -1,25 +1,20 @@
-from database import SessionLocal
-from models import UserDB
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from models import UserDB, Base
 from main import hash_password
 
-db = SessionLocal()
+DATABASE_URL = "postgresql://erp_db_gj3i_user:95nvnygizVRoOtdiyWRTUwRAZBWVLcSC@dpg-d71pl0vkijhs73cqpg30-a/erp_db_gj3i"
 
-# Check if admin already exists
-existing = db.query(UserDB).filter(UserDB.username == "admin").first()
+engine = create_engine(DATABASE_URL)
+db = Session(engine)
 
-if existing:
-    print("Admin already exists!")
-else:
-    admin = UserDB(
-        username="admin",
-        password=hash_password("admin123"),
-        role="admin"
-    )
-    db.add(admin)
-    db.commit()
-    print("✅ Admin created! Username: admin | Password: admin123")
-
+admin = UserDB(
+    username="admin",
+    password=hash_password("admin123"),
+    role="admin",
+    student_id=None
+)
+db.add(admin)
+db.commit()
 db.close()
-
-
-# This directly inserts an admin into your database. Run it **once only**.
+print("✅ Admin created!")

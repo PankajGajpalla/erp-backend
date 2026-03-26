@@ -22,7 +22,10 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # allow all (for dev)
+    allow_origins=[
+        "http://localhost:5173",
+        "https://erp-frontend-seven-zeta.vercel.app"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
