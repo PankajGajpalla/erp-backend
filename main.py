@@ -20,10 +20,15 @@ from fastapi.middleware.cors import CORSMiddleware
 # App Creation
 app = FastAPI()
 
+origins = [
+    "https://erp-frontend-qwc6qq31r-pankajgajpallas-projects.vercel.app",
+    "http://localhost:3000"  # for local testing
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=origins,   # or ["*"] for testing only
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
