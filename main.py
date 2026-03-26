@@ -235,29 +235,29 @@ def create_admin(
 
 
 # Login API
-@app.post("/login")
-def login():
-    return {"message": "working"}
 # @app.post("/login")
-# def login(user: UserLogin, db: Session = Depends(get_db)):
-#     db_user = db.query(UserDB).filter(UserDB.username == user.username).first()
+# def login():
+#     return {"message": "working"}
+@app.post("/login")
+def login(user: UserLogin, db: Session = Depends(get_db)):
+    db_user = db.query(UserDB).filter(UserDB.username == user.username).first()
 
-#     if not db_user:
-#         raise HTTPException(status_code=404, detail="User not found")
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-#     if not verify_password(user.password, db_user.password):
-#         raise HTTPException(status_code=401, detail="Incorrect password")
+    if not verify_password(user.password, db_user.password):
+        raise HTTPException(status_code=401, detail="Incorrect password")
 
-#     token = create_access_token({
-#         "sub": db_user.username,
-#         "role": db_user.role,
-#         "student_id": db_user.student_id   # included so frontend knows which student this is
-#     })
+    token = create_access_token({
+        "sub": db_user.username,
+        "role": db_user.role,
+        "student_id": db_user.student_id   # included so frontend knows which student this is
+    })
 
-#     return {
-#         "access_token": token,
-#         "token_type": "bearer"
-#     }
+    return {
+        "access_token": token,
+        "token_type": "bearer"
+    }
 
 
 # ----------------------------------------------------------------------------------------------------
