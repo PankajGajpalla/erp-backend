@@ -25,10 +25,11 @@ origins = [
     "http://localhost:3000"  # for local testing
 ]
 
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,   # or ["*"] for testing only
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
