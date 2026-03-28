@@ -122,6 +122,11 @@ class Student(BaseModel):
     course: Optional[str] = None
     fees: Optional[float] = None
 
+class TeacherUserCreate(BaseModel):
+    username: str
+    password: str
+    teacher_id: int
+
 
 class AttendanceCreate(BaseModel):
     student_id: int
@@ -256,7 +261,8 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
     token = create_access_token({
         "sub": db_user.username,
         "role": db_user.role,
-        "student_id": db_user.student_id   # included so frontend knows which student this is
+        "student_id": db_user.student_id,
+        "teacher_id": db_user.teacher_id
     })
 
     return {
@@ -799,6 +805,110 @@ def delete_notice(
     db.delete(notice)
     db.commit()
     return {"message": "Notice deleted"}
+
+
+
+
+# ----------------------------------------------------------------------------------------------------
+# TEACHER AUTH
+
+# Create teacher login (admin only)
+@app.post("/create_teacher_login")
+def create_teacher_login(
+    data: TeacherUserCreate,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_role("admin"))
+):
+    # Check teacher exists
+    teacher = db.query(TeacherDB).filter(TeacherDB.id == data.teacher_id).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+
+    # Check if teacher already has an account
+    existing = db.query(UserDB).filter(UserDB.teacher_id == data.teacher_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Teacher already has an account")
+
+    # Check username not taken
+    existing_user = db.query(UserDB).filter(UserDB.username == data.username).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+    new_user = UserDB(
+        username=data.username,
+        password=hash_password(data.password),
+        role="teacher",
+        teacher_id=data.teacher_id,
+        student_id=None
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return {"message": f"Teacher login created for {teacher.name}"}
+
+
+# Get students by course (teacher + admin)
+@app.get("/students/course/{course}")
+def get_students_by_course(
+    course: str,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    if user["role"] not in ["admin", "teacher"]:
+        raise HTTPException(status_code=403, detail="Access denied")
+    students = db.query(StudentDB).filter(StudentDB.course == course).all()
+    return {"students": students}
+
+
+# Get teacher profile
+@app.get("/teacher/me")
+def get_teacher_me(
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    if user["role"] != "teacher":
+        raise HTTPException(status_code=403, detail="Access denied")
+    db_user = db.query(UserDB).filter(UserDB.username == user["username"]).first()
+    teacher = db.query(TeacherDB).filter(TeacherDB.id == db_user.teacher_id).first()
+    return teacher
+
+
+# Bulk mark attendance (teacher + admin)
+@app.post("/mark_attendance_bulk")
+def mark_attendance_bulk(
+    records: list[AttendanceCreate],
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    if user["role"] not in ["admin", "teacher"]:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    marked = 0
+    skipped = 0
+
+    for record in records:
+        existing = db.query(AttendanceDB).filter(
+            AttendanceDB.student_id == record.student_id,
+            AttendanceDB.date == record.date
+        ).first()
+
+        if existing:
+            # Update existing record
+            existing.status = record.status
+            skipped += 1
+        else:
+            new_record = AttendanceDB(
+                student_id=record.student_id,
+                date=record.date,
+                status=record.status
+            )
+            db.add(new_record)
+            marked += 1
+
+    db.commit()
+    return {"message": "Attendance saved", "marked": marked, "updated": skipped}
+
+
 
 
 # Bulk import students

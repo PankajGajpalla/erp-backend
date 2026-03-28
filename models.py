@@ -22,9 +22,8 @@ class UserDB(Base):
     username = Column(String(100), unique=True, nullable=False)
     password = Column(String(255), nullable=False)
     role = Column(String(50), default="student", nullable=False)
-
-    # ✅ FIX 3: Link User to Student
     student_id = Column(Integer, ForeignKey("students.id"), nullable=True)
+    teacher_id = Column(Integer, ForeignKey("teachers.id"), nullable=True)
 
 
 class AttendanceDB(Base):
