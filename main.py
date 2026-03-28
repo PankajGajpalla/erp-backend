@@ -281,21 +281,32 @@ def add_student(
         raise HTTPException(status_code=400, detail="Email already exists")
 
     new_student = StudentDB(
-    name=student.name,
-    age=student.age,
-    email=student.email,
-    phone=student.phone,
-    address=student.address,
-    course=student.course,
-    fees=student.fees
-)
-    
+        name=student.name,
+        age=student.age,
+        email=student.email,
+        phone=student.phone,
+        address=student.address,
+        course=student.course,
+        fees=student.fees
+    )
     db.add(new_student)
+    db.flush()
+
+    # Auto create fee record if fees provided
+    if student.fees:
+        new_fee = FeesDB(
+            student_id=new_student.id,
+            amount=student.fees,
+            paid=0.0,
+            description="Initial Fees"
+        )
+        db.add(new_fee)
+
     db.commit()
     db.refresh(new_student)
     return {"message": "Student saved in DB", "student": new_student}
 
-
+    
 # Get all students from DB
 @app.get("/students")
 def get_students(
@@ -334,11 +345,14 @@ def update_student(
     student.name = updated_data.name
     student.age = updated_data.age
     student.email = updated_data.email
+    student.phone = updated_data.phone
+    student.address = updated_data.address
+    student.course = updated_data.course
+    student.fees = updated_data.fees
 
     db.commit()
     db.refresh(student)
     return {"message": "Student updated", "student": student}
-
 
 # Delete Student
 @app.delete("/delete_student/{student_id}")
