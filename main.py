@@ -766,7 +766,6 @@ def delete_notice(
 # Bulk import students
 class StudentBulk(BaseModel):
     students: list[Student]
-
 @app.post("/import_students")
 def import_students(
     data: StudentBulk,
@@ -775,28 +774,40 @@ def import_students(
 ):
     imported = 0
     skipped = 0
-    
+
     for student in data.students:
         existing = db.query(StudentDB).filter(StudentDB.email == student.email).first()
         if existing:
             skipped += 1
             continue
-        
+
         new_student = StudentDB(
-        name=student.name,
-        age=student.age,
-        email=student.email,
-        phone=student.phone,
-        address=student.address,
-        course=student.course,
-        fees=student.fees
-    )
+            name=student.name,
+            age=student.age,
+            email=student.email,
+            phone=student.phone,
+            address=student.address,
+            course=student.course,
+            fees=student.fees
+        )
         db.add(new_student)
+        db.flush()  # get the new student id without committing
+
+        # Auto create fee record if fees provided
+        if student.fees:
+            new_fee = FeesDB(
+                student_id=new_student.id,
+                amount=student.fees,
+                paid=0.0,
+                description="Imported Fees"
+            )
+            db.add(new_fee)
+
         imported += 1
-    
+
     db.commit()
     return {
-        "message": f"Import complete",
+        "message": "Import complete",
         "imported": imported,
         "skipped": skipped
     }
