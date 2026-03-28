@@ -12,7 +12,7 @@ from jose import JWTError, jwt
 
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from typing import Literal
+from typing import Literal, Optional
 
 # ----------------------------------------------------------------------------------------------------
 from fastapi.middleware.cors import CORSMiddleware
@@ -117,10 +117,10 @@ class Student(BaseModel):
     name: str
     age: int
     email: str
-    phone: str = None
-    address: str = None
-    course: str = None
-    fees: float = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    course: Optional[str] = None
+    fees: Optional[float] = None
 
 
 class AttendanceCreate(BaseModel):
@@ -306,7 +306,7 @@ def add_student(
     db.refresh(new_student)
     return {"message": "Student saved in DB", "student": new_student}
 
-    
+
 # Get all students from DB
 @app.get("/students")
 def get_students(
