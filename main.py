@@ -351,10 +351,15 @@ def delete_student(
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
+    # Delete all linked data first
+    db.query(UserDB).filter(UserDB.student_id == student_id).delete()
+    db.query(FeesDB).filter(FeesDB.student_id == student_id).delete()
+    db.query(AttendanceDB).filter(AttendanceDB.student_id == student_id).delete()
+    db.query(GradeDB).filter(GradeDB.student_id == student_id).delete()
+
     db.delete(student)
     db.commit()
-    return {"message": "Student deleted"}
-
+    return {"message": "Student and all related data deleted"}
 
 # ----------------------------------------------------------------------------------------------------
 
