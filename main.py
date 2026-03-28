@@ -117,6 +117,8 @@ class Student(BaseModel):
     name: str
     age: int
     email: str
+    phone: str = None
+    address: str = None
 
 
 class AttendanceCreate(BaseModel):
@@ -279,8 +281,11 @@ def add_student(
     new_student = StudentDB(
         name=student.name,
         age=student.age,
-        email=student.email
+        email=student.email,
+        phone=student.phone,
+        address=student.address
     )
+    
     db.add(new_student)
     db.commit()
     db.refresh(new_student)
@@ -752,3 +757,40 @@ def delete_notice(
     db.delete(notice)
     db.commit()
     return {"message": "Notice deleted"}
+
+
+# Bulk import students
+class StudentBulk(BaseModel):
+    students: list[Student]
+
+@app.post("/import_students")
+def import_students(
+    data: StudentBulk,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    imported = 0
+    skipped = 0
+    
+    for student in data.students:
+        existing = db.query(StudentDB).filter(StudentDB.email == student.email).first()
+        if existing:
+            skipped += 1
+            continue
+        
+        new_student = StudentDB(
+            name=student.name,
+            age=student.age,
+            email=student.email,
+            phone=student.phone,
+            address=student.address
+        )
+        db.add(new_student)
+        imported += 1
+    
+    db.commit()
+    return {
+        "message": f"Import complete",
+        "imported": imported,
+        "skipped": skipped
+    }

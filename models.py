@@ -9,6 +9,8 @@ class StudentDB(Base):
     name = Column(String(100), nullable=False)
     age = Column(Integer, nullable=False)
     email = Column(String(255), unique=True, nullable=False)
+    phone = Column(String(20), nullable=True)
+    address = Column(String(255), nullable=True)
 
 
 class UserDB(Base):
