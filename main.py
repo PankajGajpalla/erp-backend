@@ -350,6 +350,25 @@ def update_student(
     student.course = updated_data.course
     student.fees = updated_data.fees
 
+    # Update fee record if fees changed
+    if updated_data.fees is not None:
+        fee_record = db.query(FeesDB).filter(
+            FeesDB.student_id == student_id
+        ).first()
+
+        if fee_record:
+            # Update existing fee record amount
+            fee_record.amount = updated_data.fees
+        else:
+            # Create new fee record if none exists
+            new_fee = FeesDB(
+                student_id=student_id,
+                amount=updated_data.fees,
+                paid=0.0,
+                description="Updated Fees"
+            )
+            db.add(new_fee)
+
     db.commit()
     db.refresh(student)
     return {"message": "Student updated", "student": student}
