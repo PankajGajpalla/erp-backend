@@ -119,6 +119,8 @@ class Student(BaseModel):
     email: str
     phone: str = None
     address: str = None
+    course: str = None
+    fees: float = None
 
 
 class AttendanceCreate(BaseModel):
@@ -279,12 +281,14 @@ def add_student(
         raise HTTPException(status_code=400, detail="Email already exists")
 
     new_student = StudentDB(
-        name=student.name,
-        age=student.age,
-        email=student.email,
-        phone=student.phone,
-        address=student.address
-    )
+    name=student.name,
+    age=student.age,
+    email=student.email,
+    phone=student.phone,
+    address=student.address,
+    course=student.course,
+    fees=student.fees
+)
     
     db.add(new_student)
     db.commit()
@@ -779,12 +783,14 @@ def import_students(
             continue
         
         new_student = StudentDB(
-            name=student.name,
-            age=student.age,
-            email=student.email,
-            phone=student.phone,
-            address=student.address
-        )
+        name=student.name,
+        age=student.age,
+        email=student.email,
+        phone=student.phone,
+        address=student.address,
+        course=student.course,
+        fees=student.fees
+    )
         db.add(new_student)
         imported += 1
     

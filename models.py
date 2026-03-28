@@ -11,6 +11,8 @@ class StudentDB(Base):
     email = Column(String(255), unique=True, nullable=False)
     phone = Column(String(20), nullable=True)
     address = Column(String(255), nullable=True)
+    course = Column(String(100), nullable=True)
+    fees = Column(Float, nullable=True)
 
 
 class UserDB(Base):
