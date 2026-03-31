@@ -273,6 +273,29 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
 
 # ----------------------------------------------------------------------------------------------------
 
+@app.get("/dashboard/summary")
+def dashboard_summary(
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    total_students = db.query(StudentDB).count()
+    total_attendance = db.query(AttendanceDB).count()
+    
+    # Calculate total fees in one query
+    fees = db.query(FeesDB).all()
+    total_fees = sum(f.amount for f in fees)
+    total_paid = sum(f.paid for f in fees)
+    total_pending = total_fees - total_paid
+
+    return {
+        "total_students": total_students,
+        "total_attendance": total_attendance,
+        "total_fees": total_fees,
+        "total_paid": total_paid,
+        "total_pending": total_pending
+    }
+
+
 # Student APIs
 
 # Add student to DB
