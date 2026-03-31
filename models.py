@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, Float, ForeignKey
+from sqlalchemy import Column, Integer, String, Date, Float, ForeignKey, UniqueConstraint
 from database import Base
 
 
@@ -29,6 +29,11 @@ class UserDB(Base):
 class AttendanceDB(Base):
     __tablename__ = "attendance"
 
+    # ✅ Prevent duplicate attendance at DB level
+    __table_args__ = (
+        UniqueConstraint('student_id', 'date', name='unique_student_date'),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False)
     date = Column(Date, nullable=False)
@@ -40,9 +45,9 @@ class FeesDB(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False)
-    amount = Column(Float, nullable=False)       # total fee amount
-    paid = Column(Float, default=0.0)            # how much has been paid
-    description = Column(String(200), nullable=True)  # e.g. "Term 1 Fees"  status = Column(String(20), nullable=False)    # paid / unpaid
+    amount = Column(Float, nullable=False)        # total fee amount
+    paid = Column(Float, default=0.0)             # how much has been paid
+    description = Column(String(200), nullable=True)
 
 
 class TeacherDB(Base):
@@ -70,10 +75,10 @@ class TimetableDB(Base):
     __tablename__ = "timetable"
 
     id = Column(Integer, primary_key=True, index=True)
-    day = Column(String(20), nullable=False)       # Monday, Tuesday etc.
+    day = Column(String(20), nullable=False)
     subject = Column(String(100), nullable=False)
     teacher = Column(String(100), nullable=False)
-    time_slot = Column(String(50), nullable=False)  # e.g. 9:00 - 10:00
+    time_slot = Column(String(50), nullable=False)
 
 
 class NoticeDB(Base):
@@ -81,5 +86,5 @@ class NoticeDB(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(200), nullable=False)
-    content = Column(String(1000), nullable=False)
+    content = Column(String(5000), nullable=False)  # ✅ increased limit
     date = Column(Date, nullable=False)
