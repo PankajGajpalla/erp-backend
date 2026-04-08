@@ -18,9 +18,14 @@ import httpx
 FAST2SMS_API_KEY = os.getenv("FAST2SMS_API_KEY", "")
 
 async def send_sms(phone: str, message: str):
-    if not FAST2SMS_API_KEY or not phone:
+    if not FAST2SMS_API_KEY:
+        print("❌ SMS: API key not set!")
+        return False
+    if not phone:
+        print("❌ SMS: No phone number provided!")
         return False
     try:
+        print(f"📱 Sending SMS to {phone}...")
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://www.fast2sms.com/dev/bulkV2",
@@ -35,9 +40,10 @@ async def send_sms(phone: str, message: str):
                 timeout=10
             )
             data = response.json()
+            print(f"📱 Fast2SMS response: {data}")
             return data.get("return", False)
     except Exception as e:
-        print(f"SMS error: {e}")
+        print(f"❌ SMS error: {e}")
         return False
 
 
