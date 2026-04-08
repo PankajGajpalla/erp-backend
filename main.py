@@ -13,6 +13,34 @@ from typing import Literal, Optional, List
 
 from fastapi.middleware.cors import CORSMiddleware
 
+import httpx
+
+FAST2SMS_API_KEY = os.getenv("FAST2SMS_API_KEY", "")
+
+async def send_sms(phone: str, message: str):
+    if not FAST2SMS_API_KEY or not phone:
+        return False
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://www.fast2sms.com/dev/bulkV2",
+                headers={"authorization": FAST2SMS_API_KEY},
+                json={
+                    "route": "q",
+                    "message": message,
+                    "language": "english",
+                    "flash": 0,
+                    "numbers": phone
+                },
+                timeout=10
+            )
+            data = response.json()
+            return data.get("return", False)
+    except Exception as e:
+        print(f"SMS error: {e}")
+        return False
+
+
 # App Creation
 app = FastAPI(title="ERP System", version="1.0.0")
 
@@ -119,6 +147,7 @@ class Student(BaseModel):
     address: Optional[str] = None
     course: Optional[str] = None
     fees: Optional[float] = None
+    parent_phone: Optional[str] = None 
 
 class StudentBulk(BaseModel):
     students: List[Student]
@@ -261,9 +290,14 @@ def add_student(
         raise HTTPException(status_code=400, detail="Email already exists")
 
     new_student = StudentDB(
-        name=student.name, age=student.age, email=student.email,
-        phone=student.phone, address=student.address,
-        course=student.course, fees=student.fees
+        name=student.name,
+        age=student.age,
+        email=student.email,
+        phone=student.phone,
+        address=student.address,
+        course=student.course,
+        fees=student.fees,
+        parent_phone=student.parent_phone  # ✅ new
     )
     db.add(new_student)
     db.flush()
@@ -306,6 +340,9 @@ def update_student(
 
     for field in ["name", "age", "email", "phone", "address", "course", "fees"]:
         setattr(student, field, getattr(updated_data, field))
+    
+    #updated...
+    student.parent_phone = updated_data.parent_phone 
 
     if updated_data.fees is not None:
         fee_record = db.query(FeesDB).filter(FeesDB.student_id == student_id).first()
@@ -356,9 +393,14 @@ def import_students(
             continue
 
         new_student = StudentDB(
-            name=student.name, age=student.age, email=student.email,
-            phone=student.phone, address=student.address,
-            course=student.course, fees=student.fees
+            name=student.name,
+            age=student.age,
+            email=student.email,
+            phone=student.phone,
+            address=student.address,
+            course=student.course,
+            fees=student.fees,
+            parent_phone=student.parent_phone  # ✅ new
         )
         db.add(new_student)
         db.flush()
@@ -444,12 +486,15 @@ def get_student_attendance(
 
 
 @app.post("/mark_attendance_bulk")
-def mark_attendance_bulk(
+async def mark_attendance_bulk(
     records: List[AttendanceCreate],
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(["admin", "teacher"]))
 ):
     marked = updated = 0
+    sms_sent = 0
+    sms_failed = 0
+
     for record in records:
         existing = db.query(AttendanceDB).filter(
             AttendanceDB.student_id == record.student_id,
@@ -462,13 +507,36 @@ def mark_attendance_bulk(
         else:
             db.add(AttendanceDB(
                 student_id=record.student_id,
-                date=record.date, status=record.status
+                date=record.date,
+                status=record.status
             ))
             marked += 1
 
-    db.commit()
-    return {"message": "Attendance saved", "marked": marked, "updated": updated}
+        # ✅ Send SMS to parent if marked present
+        if record.status == "present":
+            student = db.query(StudentDB).filter(
+                StudentDB.id == record.student_id
+            ).first()
 
+            if student and student.parent_phone:
+                message = (
+                    f"Dear Parent, your child {student.name} has been marked "
+                    f"PRESENT on {record.date}. - ERP System"
+                )
+                sent = await send_sms(student.parent_phone, message)
+                if sent:
+                    sms_sent += 1
+                else:
+                    sms_failed += 1
+
+    db.commit()
+    return {
+        "message": "Attendance saved",
+        "marked": marked,
+        "updated": updated,
+        "sms_sent": sms_sent,
+        "sms_failed": sms_failed
+    }
 # ----------------------------------------------------------------------------------------------------
 # FEES
 

@@ -13,7 +13,7 @@ class StudentDB(Base):
     address = Column(String(255), nullable=True)
     course = Column(String(100), nullable=True)
     fees = Column(Float, nullable=True)
-
+    parent_phone = Column(String(20), nullable=True)
 
 class UserDB(Base):
     __tablename__ = "users"
