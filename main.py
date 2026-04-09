@@ -497,6 +497,7 @@ async def mark_attendance_bulk(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(["admin", "teacher"]))
 ):
+    print(f"📋 Bulk attendance called with {len(records)} records")
     marked = updated = 0
     sms_sent = 0
     sms_failed = 0
