@@ -520,7 +520,7 @@ async def mark_attendance_bulk(
             marked += 1
 
         # ✅ Send SMS to parent if marked present
-        if record.status == "present":
+        if record.status in ["present", "absent"]:
             student = db.query(StudentDB).filter(
                 StudentDB.id == record.student_id
             ).first()
@@ -528,7 +528,8 @@ async def mark_attendance_bulk(
             if student and student.parent_phone:
                 message = (
                     f"Dear Parent, your child {student.name} has been marked "
-                    f"PRESENT on {record.date}. - ERP System"
+                    f"{'PRESENT' if record.status == 'present' else 'ABSENT'} "
+                    f"on {record.date}. - ERP System"
                 )
                 sent = await send_sms(student.parent_phone, message)
                 if sent:
