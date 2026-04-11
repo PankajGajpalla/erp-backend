@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import SessionLocal, engine, Base
-from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB
+from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB
 from pydantic import BaseModel
 from fastapi import HTTPException
 from passlib.context import CryptContext
@@ -74,6 +74,8 @@ def run_migrations():
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS admission_date DATE",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS photo TEXT",
         "ALTER TABLE fees ADD COLUMN IF NOT EXISTS due_date DATE",
+        "ALTER TABLE attendance ADD COLUMN IF NOT EXISTS subject_id INTEGER REFERENCES subjects(id)",
+        "ALTER TABLE attendance DROP CONSTRAINT IF EXISTS unique_student_date",
     ]
     with engine.connect() as conn:
         for sql in new_columns:
@@ -81,6 +83,10 @@ def run_migrations():
                 conn.execute(text(sql))
             except Exception as e:
                 print(f"Migration skipped: {e}")
+        try:
+            conn.execute(text("ALTER TABLE attendance ADD CONSTRAINT unique_student_date_subject UNIQUE (student_id, date, subject_id)"))
+        except Exception:
+            pass  # constraint already exists
         conn.commit()
     print("✅ Migrations complete")
 
@@ -196,6 +202,7 @@ class AttendanceCreate(BaseModel):
     student_id: int
     date: date
     status: Literal["present", "absent"]
+    subject_id: Optional[int] = None
 
 class FeesCreate(BaseModel):
     student_id: int
@@ -236,6 +243,11 @@ class CourseCreate(BaseModel):
     description: Optional[str] = None
     duration: Optional[str] = None
     fees: Optional[float] = None
+
+class SubjectCreate(BaseModel):
+    course_id: int
+    name: str
+    teacher_id: Optional[int] = None
 
 # ----------------------------------------------------------------------------------------------------
 
@@ -523,14 +535,16 @@ def mark_attendance(
 
     existing = db.query(AttendanceDB).filter(
         AttendanceDB.student_id == attendance.student_id,
-        AttendanceDB.date == attendance.date
+        AttendanceDB.date == attendance.date,
+        AttendanceDB.subject_id == attendance.subject_id
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Attendance already marked for this date")
 
     new_record = AttendanceDB(
         student_id=attendance.student_id,
-        date=attendance.date, status=attendance.status
+        date=attendance.date, status=attendance.status,
+        subject_id=attendance.subject_id
     )
     db.add(new_record)
     db.commit()
@@ -575,7 +589,8 @@ async def mark_attendance_bulk(
     for record in records:
         existing = db.query(AttendanceDB).filter(
             AttendanceDB.student_id == record.student_id,
-            AttendanceDB.date == record.date
+            AttendanceDB.date == record.date,
+            AttendanceDB.subject_id == record.subject_id
         ).first()
 
         if existing:
@@ -585,7 +600,8 @@ async def mark_attendance_bulk(
             db.add(AttendanceDB(
                 student_id=record.student_id,
                 date=record.date,
-                status=record.status
+                status=record.status,
+                subject_id=record.subject_id
             ))
             marked += 1
 
@@ -1023,3 +1039,122 @@ def delete_course(
     db.delete(course)
     db.commit()
     return {"message": "Course deleted"}
+
+# ----------------------------------------------------------------------------------------------------
+# SUBJECTS
+
+@app.post("/add_subject")
+def add_subject(
+    subject: SubjectCreate,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    course = db.query(CourseDB).filter(CourseDB.id == subject.course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if db.query(SubjectDB).filter(
+        SubjectDB.course_id == subject.course_id,
+        SubjectDB.name == subject.name
+    ).first():
+        raise HTTPException(status_code=400, detail="Subject already exists in this course")
+    new_subject = SubjectDB(
+        course_id=subject.course_id,
+        name=subject.name,
+        teacher_id=subject.teacher_id
+    )
+    db.add(new_subject)
+    db.commit()
+    db.refresh(new_subject)
+    return {"message": "Subject added", "data": new_subject}
+
+
+@app.get("/subjects")
+def get_all_subjects(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    return {"subjects": db.query(SubjectDB).all()}
+
+
+@app.get("/subjects/course/{course_id}")
+def get_subjects_by_course(
+    course_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    subjects = db.query(SubjectDB).filter(SubjectDB.course_id == course_id).all()
+    result = []
+    for s in subjects:
+        teacher = db.query(TeacherDB).filter(TeacherDB.id == s.teacher_id).first() if s.teacher_id else None
+        result.append({
+            "id": s.id,
+            "course_id": s.course_id,
+            "name": s.name,
+            "teacher_id": s.teacher_id,
+            "teacher_name": teacher.name if teacher else None
+        })
+    return {"subjects": result}
+
+
+@app.put("/update_subject/{subject_id}")
+def update_subject(
+    subject_id: int,
+    updated: SubjectCreate,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    subject = db.query(SubjectDB).filter(SubjectDB.id == subject_id).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+    subject.name = updated.name
+    subject.teacher_id = updated.teacher_id
+    db.commit()
+    db.refresh(subject)
+    return {"message": "Subject updated", "data": subject}
+
+
+@app.delete("/delete_subject/{subject_id}")
+def delete_subject(
+    subject_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    subject = db.query(SubjectDB).filter(SubjectDB.id == subject_id).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+    db.delete(subject)
+    db.commit()
+    return {"message": "Subject deleted"}
+
+
+@app.get("/attendance/subject-wise/{student_id}")
+def subject_wise_attendance(
+    student_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    if user["role"] == "student":
+        db_user = db.query(UserDB).filter(UserDB.username == user["username"]).first()
+        if not db_user or db_user.student_id != student_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    records = db.query(AttendanceDB).filter(AttendanceDB.student_id == student_id).all()
+
+    subject_map = {}
+    for r in records:
+        key = r.subject_id
+        if key not in subject_map:
+            subj = db.query(SubjectDB).filter(SubjectDB.id == key).first() if key else None
+            subject_map[key] = {
+                "subject_id": key,
+                "subject_name": subj.name if subj else "General",
+                "total": 0,
+                "present": 0
+            }
+        subject_map[key]["total"] += 1
+        if r.status == "present":
+            subject_map[key]["present"] += 1
+
+    result = []
+    for s in subject_map.values():
+        s["percentage"] = round((s["present"] / s["total"]) * 100, 1) if s["total"] > 0 else 0
+        result.append(s)
+
+    return {"subjects": result}

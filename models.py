@@ -34,6 +34,15 @@ class CourseDB(Base):
     fees = Column(Float, nullable=True)             # default fees for this course
 
 
+class SubjectDB(Base):
+    __tablename__ = "subjects"
+
+    id = Column(Integer, primary_key=True, index=True)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
+    name = Column(String(200), nullable=False)
+    teacher_id = Column(Integer, ForeignKey("teachers.id"), nullable=True)
+
+
 class UserDB(Base):
     __tablename__ = "users"
 
@@ -50,13 +59,14 @@ class AttendanceDB(Base):
 
     # ✅ Prevent duplicate attendance at DB level
     __table_args__ = (
-        UniqueConstraint('student_id', 'date', name='unique_student_date'),
+        UniqueConstraint('student_id', 'date', 'subject_id', name='unique_student_date_subject'),
     )
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False)
     date = Column(Date, nullable=False)
     status = Column(String(20), nullable=False)    # present / absent
+    subject_id = Column(Integer, ForeignKey("subjects.id"), nullable=True)
 
 
 class FeesDB(Base):
