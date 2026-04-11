@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, Float, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Date, Float, ForeignKey, UniqueConstraint, Text
 from database import Base
 
 
@@ -7,13 +7,22 @@ class StudentDB(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
-    age = Column(Integer, nullable=False)
+    father_name = Column(String(100), nullable=True)
+    dob = Column(Date, nullable=True)
     email = Column(String(255), unique=True, nullable=False)
-    phone = Column(String(20), nullable=True)
-    address = Column(String(255), nullable=True)
+    phone = Column(String(20), nullable=True)           # student mobile
+    parent_phone = Column(String(20), nullable=True)
+    permanent_address = Column(String(500), nullable=True)
+    local_address = Column(String(500), nullable=True)
     course = Column(String(100), nullable=True)
     fees = Column(Float, nullable=True)
-    parent_phone = Column(String(20), nullable=True)
+    school_college_name = Column(String(200), nullable=True)
+    medium = Column(String(20), nullable=True)          # hindi / english
+    admission_date = Column(Date, nullable=True)
+    photo = Column(Text, nullable=True)                 # base64 image
+    # kept for backward compatibility
+    age = Column(Integer, nullable=True)
+    address = Column(String(255), nullable=True)
 
 class UserDB(Base):
     __tablename__ = "users"
