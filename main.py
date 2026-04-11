@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from database import SessionLocal, engine, Base
 from models import StudentDB, UserDB, AttendanceDB, FeesDB, TeacherDB, NoticeDB, GradeDB, TimetableDB
 from pydantic import BaseModel
@@ -60,6 +61,29 @@ app.add_middleware(
 
 # Create tables
 Base.metadata.create_all(bind=engine)
+
+# Auto-migrate: add new columns to existing tables (safe, idempotent)
+def run_migrations():
+    new_columns = [
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS father_name VARCHAR(100)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS dob DATE",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS permanent_address VARCHAR(500)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS local_address VARCHAR(500)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS school_college_name VARCHAR(200)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS medium VARCHAR(20)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS admission_date DATE",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS photo TEXT",
+    ]
+    with engine.connect() as conn:
+        for sql in new_columns:
+            try:
+                conn.execute(text(sql))
+            except Exception as e:
+                print(f"Migration skipped: {e}")
+        conn.commit()
+    print("✅ Migrations complete")
+
+run_migrations()
 
 # Dependency to get DB session
 def get_db():
@@ -147,13 +171,22 @@ class UserLogin(BaseModel):
 
 class Student(BaseModel):
     name: str
-    age: int
+    father_name: str
+    dob: date
     email: str
-    phone: Optional[str] = None
+    phone: str                              # student mobile
+    parent_phone: str
+    permanent_address: str
+    local_address: str
+    course: str
+    fees: float
+    school_college_name: str
+    medium: Literal["hindi", "english"]
+    admission_date: date
+    photo: Optional[str] = None             # base64 image string
+    # backward-compat fields (not required from new UI)
+    age: Optional[int] = None
     address: Optional[str] = None
-    course: Optional[str] = None
-    fees: Optional[float] = None
-    parent_phone: Optional[str] = None 
 
 class StudentBulk(BaseModel):
     students: List[Student]
@@ -297,13 +330,21 @@ def add_student(
 
     new_student = StudentDB(
         name=student.name,
-        age=student.age,
+        father_name=student.father_name,
+        dob=student.dob,
         email=student.email,
         phone=student.phone,
-        address=student.address,
+        parent_phone=student.parent_phone,
+        permanent_address=student.permanent_address,
+        local_address=student.local_address,
         course=student.course,
         fees=student.fees,
-        parent_phone=student.parent_phone  # ✅ new
+        school_college_name=student.school_college_name,
+        medium=student.medium,
+        admission_date=student.admission_date,
+        photo=student.photo,
+        age=student.age,
+        address=student.permanent_address,
     )
     db.add(new_student)
     db.flush()
@@ -344,11 +385,22 @@ def update_student(
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    for field in ["name", "age", "email", "phone", "address", "course", "fees"]:
-        setattr(student, field, getattr(updated_data, field))
-    
-    #updated...
-    student.parent_phone = updated_data.parent_phone 
+    student.name = updated_data.name
+    student.father_name = updated_data.father_name
+    student.dob = updated_data.dob
+    student.email = updated_data.email
+    student.phone = updated_data.phone
+    student.parent_phone = updated_data.parent_phone
+    student.permanent_address = updated_data.permanent_address
+    student.local_address = updated_data.local_address
+    student.course = updated_data.course
+    student.fees = updated_data.fees
+    student.school_college_name = updated_data.school_college_name
+    student.medium = updated_data.medium
+    student.admission_date = updated_data.admission_date
+    if updated_data.photo:
+        student.photo = updated_data.photo
+    student.address = updated_data.permanent_address
 
     if updated_data.fees is not None:
         fee_record = db.query(FeesDB).filter(FeesDB.student_id == student_id).first()
@@ -400,13 +452,21 @@ def import_students(
 
         new_student = StudentDB(
             name=student.name,
-            age=student.age,
+            father_name=student.father_name,
+            dob=student.dob,
             email=student.email,
             phone=student.phone,
-            address=student.address,
+            parent_phone=student.parent_phone,
+            permanent_address=student.permanent_address,
+            local_address=student.local_address,
             course=student.course,
             fees=student.fees,
-            parent_phone=student.parent_phone  # ✅ new
+            school_college_name=student.school_college_name,
+            medium=student.medium,
+            admission_date=student.admission_date,
+            photo=student.photo,
+            age=student.age,
+            address=student.permanent_address,
         )
         db.add(new_student)
         db.flush()
