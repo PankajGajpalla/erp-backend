@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import SessionLocal, engine, Base
-from models import StudentDB, UserDB, AttendanceDB, FeesDB, TeacherDB, NoticeDB, GradeDB, TimetableDB
+from models import StudentDB, UserDB, AttendanceDB, FeesDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB
 from pydantic import BaseModel
 from fastapi import HTTPException
 from passlib.context import CryptContext
@@ -226,6 +226,12 @@ class NoticeCreate(BaseModel):
     title: str
     content: str
     date: date
+
+class CourseCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    duration: Optional[str] = None
+    fees: Optional[float] = None
 
 # ----------------------------------------------------------------------------------------------------
 
@@ -926,3 +932,66 @@ def delete_notice(
     db.delete(notice)
     db.commit()
     return {"message": "Notice deleted"}
+
+# ----------------------------------------------------------------------------------------------------
+# COURSES
+
+@app.post("/add_course")
+def add_course(
+    course: CourseCreate,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    if db.query(CourseDB).filter(CourseDB.name == course.name).first():
+        raise HTTPException(status_code=400, detail="Course already exists")
+    new_course = CourseDB(
+        name=course.name,
+        description=course.description,
+        duration=course.duration,
+        fees=course.fees
+    )
+    db.add(new_course)
+    db.commit()
+    db.refresh(new_course)
+    return {"message": "Course added", "data": new_course}
+
+
+@app.get("/courses")
+def get_courses(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    return {"courses": db.query(CourseDB).order_by(CourseDB.name).all()}
+
+
+@app.put("/update_course/{course_id}")
+def update_course(
+    course_id: int,
+    updated: CourseCreate,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    course = db.query(CourseDB).filter(CourseDB.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    existing = db.query(CourseDB).filter(CourseDB.name == updated.name, CourseDB.id != course_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Another course with this name already exists")
+    course.name = updated.name
+    course.description = updated.description
+    course.duration = updated.duration
+    course.fees = updated.fees
+    db.commit()
+    db.refresh(course)
+    return {"message": "Course updated", "data": course}
+
+
+@app.delete("/delete_course/{course_id}")
+def delete_course(
+    course_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    course = db.query(CourseDB).filter(CourseDB.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    db.delete(course)
+    db.commit()
+    return {"message": "Course deleted"}

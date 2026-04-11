@@ -24,6 +24,16 @@ class StudentDB(Base):
     age = Column(Integer, nullable=True)
     address = Column(String(255), nullable=True)
 
+class CourseDB(Base):
+    __tablename__ = "courses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), unique=True, nullable=False)
+    description = Column(String(500), nullable=True)
+    duration = Column(String(100), nullable=True)   # e.g. "1 Year", "6 Months"
+    fees = Column(Float, nullable=True)             # default fees for this course
+
+
 class UserDB(Base):
     __tablename__ = "users"
 
