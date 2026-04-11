@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import SessionLocal, engine, Base
-from models import StudentDB, UserDB, AttendanceDB, FeesDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB
+from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB
 from pydantic import BaseModel
 from fastapi import HTTPException
 from passlib.context import CryptContext
@@ -73,6 +73,7 @@ def run_migrations():
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS medium VARCHAR(20)",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS admission_date DATE",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS photo TEXT",
+        "ALTER TABLE fees ADD COLUMN IF NOT EXISTS due_date DATE",
     ]
     with engine.connect() as conn:
         for sql in new_columns:
@@ -200,9 +201,12 @@ class FeesCreate(BaseModel):
     student_id: int
     amount: float
     description: Optional[str] = None
+    due_date: Optional[date] = None
 
 class FeesPayment(BaseModel):
     pay_amount: float
+    paid_date: Optional[date] = None
+    note: Optional[str] = None
 
 class TeacherCreate(BaseModel):
     name: str
@@ -626,7 +630,8 @@ def add_fees(
     new_fee = FeesDB(
         student_id=fees.student_id,
         amount=fees.amount, paid=0.0,
-        description=fees.description
+        description=fees.description,
+        due_date=fees.due_date
     )
     db.add(new_fee)
     db.commit()
@@ -685,9 +690,32 @@ def pay_fees(
         raise HTTPException(status_code=400, detail=f"Payment exceeds pending amount of ₹{pending}")
 
     fee.paid += payment.pay_amount
+    db.add(FeePaymentDB(
+        fee_id=fee_id,
+        amount=payment.pay_amount,
+        paid_date=payment.paid_date or date.today(),
+        note=payment.note
+    ))
     db.commit()
     db.refresh(fee)
     return {"message": "Payment updated", "data": fee, "remaining": fee.amount - fee.paid}
+
+@app.get("/fee_payments/{fee_id}")
+def get_fee_payments(
+    fee_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    fee = db.query(FeesDB).filter(FeesDB.id == fee_id).first()
+    if not fee:
+        raise HTTPException(status_code=404, detail="Fee record not found")
+    # Students can only view their own payments
+    if user["role"] == "student":
+        db_user = db.query(UserDB).filter(UserDB.username == user["username"]).first()
+        if not db_user or db_user.student_id != fee.student_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+    payments = db.query(FeePaymentDB).filter(FeePaymentDB.fee_id == fee_id).order_by(FeePaymentDB.paid_date.desc()).all()
+    return {"payments": payments}
 
 # ----------------------------------------------------------------------------------------------------
 # TEACHERS

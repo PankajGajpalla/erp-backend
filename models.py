@@ -67,6 +67,17 @@ class FeesDB(Base):
     amount = Column(Float, nullable=False)        # total fee amount
     paid = Column(Float, default=0.0)             # how much has been paid
     description = Column(String(200), nullable=True)
+    due_date = Column(Date, nullable=True)        # payment due date
+
+
+class FeePaymentDB(Base):
+    __tablename__ = "fee_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    fee_id = Column(Integer, ForeignKey("fees.id"), nullable=False)
+    amount = Column(Float, nullable=False)        # amount paid in this transaction
+    paid_date = Column(Date, nullable=False)      # date of this payment
+    note = Column(String(200), nullable=True)     # e.g. "Cash", "Online", receipt no.
 
 
 class TeacherDB(Base):
