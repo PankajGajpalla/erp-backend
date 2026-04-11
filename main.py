@@ -76,6 +76,7 @@ def run_migrations():
         "ALTER TABLE fees ADD COLUMN IF NOT EXISTS due_date DATE",
         "ALTER TABLE attendance ADD COLUMN IF NOT EXISTS subject_id INTEGER REFERENCES subjects(id)",
         "ALTER TABLE attendance DROP CONSTRAINT IF EXISTS unique_student_date",
+        "ALTER TABLE grades ADD COLUMN IF NOT EXISTS test_title VARCHAR(200)",
     ]
     with engine.connect() as conn:
         for sql in new_columns:
@@ -226,6 +227,7 @@ class GradeCreate(BaseModel):
     subject: str
     marks: float
     total_marks: float
+    test_title: Optional[str] = None
 
 class TimetableCreate(BaseModel):
     day: str
@@ -866,7 +868,8 @@ def add_grade(
         subject=grade.subject,
         marks=grade.marks,
         total_marks=grade.total_marks,
-        grade=g
+        grade=g,
+        test_title=grade.test_title
     )
     db.add(new_grade)
     db.commit()

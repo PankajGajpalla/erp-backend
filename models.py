@@ -109,6 +109,7 @@ class GradeDB(Base):
     marks = Column(Float, nullable=False)
     total_marks = Column(Float, nullable=False)
     grade = Column(String(5), nullable=True)
+    test_title = Column(String(200), nullable=True)  # e.g. "Unit Test 1", "Mid Term"
 
 
 class TimetableDB(Base):
