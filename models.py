@@ -20,9 +20,6 @@ class StudentDB(Base):
     medium = Column(String(20), nullable=True)          # hindi / english
     admission_date = Column(Date, nullable=True)
     photo = Column(Text, nullable=True)                 # base64 image
-    # kept for backward compatibility
-    age = Column(Integer, nullable=True)
-    address = Column(String(255), nullable=True)
 
 class CourseDB(Base):
     __tablename__ = "courses"

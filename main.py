@@ -77,8 +77,8 @@ def run_migrations():
         "ALTER TABLE attendance ADD COLUMN IF NOT EXISTS subject_id INTEGER REFERENCES subjects(id)",
         "ALTER TABLE attendance DROP CONSTRAINT IF EXISTS unique_student_date",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS test_title VARCHAR(200)",
-        "ALTER TABLE students ALTER COLUMN age DROP NOT NULL",
-        "ALTER TABLE students ALTER COLUMN age SET DEFAULT NULL",
+        "ALTER TABLE students DROP COLUMN IF EXISTS age",
+        "ALTER TABLE students DROP COLUMN IF EXISTS address",
     ]
     with engine.connect() as conn:
         for sql in new_columns:
@@ -194,9 +194,6 @@ class Student(BaseModel):
     medium: Optional[str] = None           # validated on frontend
     admission_date: Optional[date] = None
     photo: Optional[str] = None             # base64 image string
-    # backward-compat fields (not required from new UI)
-    age: Optional[int] = None
-    address: Optional[str] = None
 
 class StudentBulk(BaseModel):
     students: List[Student]
@@ -369,8 +366,6 @@ def add_student(
         medium=student.medium,
         admission_date=student.admission_date,
         photo=student.photo,
-        age=student.age,
-        address=student.permanent_address,
     )
     db.add(new_student)
     db.flush()
@@ -492,8 +487,6 @@ def import_students(
                 medium=student.medium,
                 admission_date=student.admission_date,
                 photo=student.photo,
-                age=student.age,
-                address=student.permanent_address,
             )
             db.add(new_student)
             db.flush()
