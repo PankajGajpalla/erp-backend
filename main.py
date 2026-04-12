@@ -179,18 +179,18 @@ class UserLogin(BaseModel):
 
 class Student(BaseModel):
     name: str
-    father_name: str
+    father_name: Optional[str] = None
     dob: date
     email: str
-    phone: str                              # student mobile
-    parent_phone: str
-    permanent_address: str
-    local_address: str
-    course: str
-    fees: float
-    school_college_name: str
-    medium: Literal["hindi", "english"]
-    admission_date: date
+    phone: Optional[str] = None
+    parent_phone: Optional[str] = None
+    permanent_address: Optional[str] = None
+    local_address: Optional[str] = None
+    course: Optional[str] = None
+    fees: Optional[float] = None
+    school_college_name: Optional[str] = None
+    medium: Optional[str] = None           # validated on frontend
+    admission_date: Optional[date] = None
     photo: Optional[str] = None             # base64 image string
     # backward-compat fields (not required from new UI)
     age: Optional[int] = None
@@ -469,41 +469,46 @@ def import_students(
 ):
     imported = skipped = 0
 
-    for student in data.students:
-        if db.query(StudentDB).filter(StudentDB.email == student.email).first():
-            skipped += 1
-            continue
+    try:
+        for student in data.students:
+            if db.query(StudentDB).filter(StudentDB.email == student.email).first():
+                skipped += 1
+                continue
 
-        new_student = StudentDB(
-            name=student.name,
-            father_name=student.father_name,
-            dob=student.dob,
-            email=student.email,
-            phone=student.phone,
-            parent_phone=student.parent_phone,
-            permanent_address=student.permanent_address,
-            local_address=student.local_address,
-            course=student.course,
-            fees=student.fees,
-            school_college_name=student.school_college_name,
-            medium=student.medium,
-            admission_date=student.admission_date,
-            photo=student.photo,
-            age=student.age,
-            address=student.permanent_address,
-        )
-        db.add(new_student)
-        db.flush()
+            new_student = StudentDB(
+                name=student.name,
+                father_name=student.father_name,
+                dob=student.dob,
+                email=student.email,
+                phone=student.phone,
+                parent_phone=student.parent_phone,
+                permanent_address=student.permanent_address,
+                local_address=student.local_address,
+                course=student.course,
+                fees=student.fees,
+                school_college_name=student.school_college_name,
+                medium=student.medium,
+                admission_date=student.admission_date,
+                photo=student.photo,
+                age=student.age,
+                address=student.permanent_address,
+            )
+            db.add(new_student)
+            db.flush()
 
-        if student.fees:
-            db.add(FeesDB(
-                student_id=new_student.id,
-                amount=student.fees, paid=0.0,
-                description="Imported Fees"
-            ))
-        imported += 1
+            if student.fees:
+                db.add(FeesDB(
+                    student_id=new_student.id,
+                    amount=student.fees, paid=0.0,
+                    description="Imported Fees"
+                ))
+            imported += 1
 
-    db.commit()
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Import failed: {str(e)}")
+
     return {"message": "Import complete", "imported": imported, "skipped": skipped}
 
 # ----------------------------------------------------------------------------------------------------
