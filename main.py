@@ -63,8 +63,9 @@ app.add_middleware(
 Base.metadata.create_all(bind=engine)
 
 # Auto-migrate: add new columns to existing tables (safe, idempotent)
+# Each statement runs in its own connection so a failure doesn't abort others.
 def run_migrations():
-    new_columns = [
+    statements = [
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS father_name VARCHAR(100)",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS dob DATE",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS permanent_address VARCHAR(500)",
@@ -80,18 +81,15 @@ def run_migrations():
         "ALTER TABLE students ALTER COLUMN age DROP NOT NULL",
         "ALTER TABLE students DROP COLUMN IF EXISTS age",
         "ALTER TABLE students DROP COLUMN IF EXISTS address",
+        "ALTER TABLE attendance ADD CONSTRAINT IF NOT EXISTS unique_student_date_subject UNIQUE (student_id, date, subject_id)",
     ]
-    with engine.connect() as conn:
-        for sql in new_columns:
-            try:
-                conn.execute(text(sql))
-            except Exception as e:
-                print(f"Migration skipped: {e}")
+    for sql in statements:
         try:
-            conn.execute(text("ALTER TABLE attendance ADD CONSTRAINT unique_student_date_subject UNIQUE (student_id, date, subject_id)"))
-        except Exception:
-            pass  # constraint already exists
-        conn.commit()
+            with engine.connect() as conn:
+                conn.execute(text(sql))
+                conn.commit()
+        except Exception as e:
+            print(f"Migration skipped ({sql[:60]}...): {e}")
     print("✅ Migrations complete")
 
 run_migrations()
