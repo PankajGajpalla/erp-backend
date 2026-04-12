@@ -77,6 +77,7 @@ def run_migrations():
         "ALTER TABLE attendance ADD COLUMN IF NOT EXISTS subject_id INTEGER REFERENCES subjects(id)",
         "ALTER TABLE attendance DROP CONSTRAINT IF EXISTS unique_student_date",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS test_title VARCHAR(200)",
+        "ALTER TABLE students ALTER COLUMN age DROP NOT NULL",
         "ALTER TABLE students DROP COLUMN IF EXISTS age",
         "ALTER TABLE students DROP COLUMN IF EXISTS address",
     ]
