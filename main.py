@@ -85,6 +85,7 @@ def run_migrations():
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS student_code VARCHAR(20)",
         "UPDATE students SET student_code = CONCAT('STU', LPAD(id::text, 4, '0')) WHERE student_code IS NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_students_student_code ON students(student_code)",
+        "ALTER TABLE timetable ADD COLUMN IF NOT EXISTS course_id INTEGER REFERENCES courses(id)",
     ]
     for sql in statements:
         try:
@@ -231,6 +232,7 @@ class GradeCreate(BaseModel):
     test_title: Optional[str] = None
 
 class TimetableCreate(BaseModel):
+    course_id: int
     day: str
     subject: str
     teacher: str
@@ -919,6 +921,7 @@ def add_timetable(
     user: dict = Depends(require_role("admin"))
 ):
     new_entry = TimetableDB(
+        course_id=entry.course_id,
         day=entry.day, subject=entry.subject,
         teacher=entry.teacher, time_slot=entry.time_slot
     )
@@ -926,6 +929,15 @@ def add_timetable(
     db.commit()
     db.refresh(new_entry)
     return {"message": "Timetable entry added", "data": new_entry}
+
+
+@app.get("/timetable/course/{course_id}")
+def get_timetable_by_course(
+    course_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    return {"timetable": db.query(TimetableDB).filter(TimetableDB.course_id == course_id).all()}
 
 
 @app.get("/timetable")

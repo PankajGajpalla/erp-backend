@@ -114,6 +114,7 @@ class TimetableDB(Base):
     __tablename__ = "timetable"
 
     id = Column(Integer, primary_key=True, index=True)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=True)
     day = Column(String(20), nullable=False)
     subject = Column(String(100), nullable=False)
     teacher = Column(String(100), nullable=False)
