@@ -82,6 +82,9 @@ def run_migrations():
         "ALTER TABLE students DROP COLUMN IF EXISTS age",
         "ALTER TABLE students DROP COLUMN IF EXISTS address",
         "ALTER TABLE attendance ADD CONSTRAINT IF NOT EXISTS unique_student_date_subject UNIQUE (student_id, date, subject_id)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS student_code VARCHAR(20)",
+        "UPDATE students SET student_code = CONCAT('STU', LPAD(id::text, 4, '0')) WHERE student_code IS NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_students_student_code ON students(student_code)",
     ]
     for sql in statements:
         try:
@@ -368,6 +371,7 @@ def add_student(
     )
     db.add(new_student)
     db.flush()
+    new_student.student_code = f"STU{new_student.id:04d}"
 
     if student.fees:
         db.add(FeesDB(
@@ -489,6 +493,7 @@ def import_students(
             )
             db.add(new_student)
             db.flush()
+            new_student.student_code = f"STU{new_student.id:04d}"
 
             if student.fees:
                 db.add(FeesDB(

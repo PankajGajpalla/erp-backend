@@ -6,6 +6,7 @@ class StudentDB(Base):
     __tablename__ = "students"
 
     id = Column(Integer, primary_key=True, index=True)
+    student_code = Column(String(20), unique=True, nullable=True)  # e.g. STU0001
     name = Column(String(100), nullable=False)
     father_name = Column(String(100), nullable=True)
     dob = Column(Date, nullable=True)
