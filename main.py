@@ -77,6 +77,8 @@ def run_migrations():
         "ALTER TABLE attendance ADD COLUMN IF NOT EXISTS subject_id INTEGER REFERENCES subjects(id)",
         "ALTER TABLE attendance DROP CONSTRAINT IF EXISTS unique_student_date",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS test_title VARCHAR(200)",
+        "ALTER TABLE students ALTER COLUMN age DROP NOT NULL",
+        "ALTER TABLE students ALTER COLUMN age SET DEFAULT NULL",
     ]
     with engine.connect() as conn:
         for sql in new_columns:
