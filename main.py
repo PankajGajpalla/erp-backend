@@ -203,6 +203,10 @@ class Student(BaseModel):
 class StudentBulk(BaseModel):
     students: List[Student]
 
+class BulkUpdateCourse(BaseModel):
+    student_ids: List[int]
+    course: str
+
 class AttendanceCreate(BaseModel):
     student_id: int
     date: date
@@ -346,16 +350,64 @@ def dashboard_summary(
     total_students = db.query(StudentDB).count()
     total_attendance = db.query(AttendanceDB).count()
     fees = db.query(FeesDB).all()
-    total_fees = sum(f.amount for f in fees)
-    total_paid = sum(f.paid for f in fees)
+    total_fees = sum(f.amount or 0 for f in fees)
+    total_paid = sum(f.paid or 0 for f in fees)
+
+    # Course-wise student count
+    courses = db.query(CourseDB).all()
+    course_stats = []
+    for c in courses:
+        count = db.query(StudentDB).filter(StudentDB.course == c.name).count()
+        course_stats.append({"name": c.name, "students": count})
+
+    # Overdue fees count
+    today = date.today()
+    overdue_count = db.query(FeesDB).filter(
+        FeesDB.due_date != None,
+        FeesDB.due_date < today,
+        FeesDB.amount > FeesDB.paid
+    ).count()
 
     return {
         "total_students": total_students,
         "total_attendance": total_attendance,
         "total_fees": total_fees,
         "total_paid": total_paid,
-        "total_pending": total_fees - total_paid
+        "total_pending": total_fees - total_paid,
+        "overdue_fees_count": overdue_count,
+        "course_stats": course_stats
     }
+
+
+@app.get("/fees/overdue")
+def get_overdue_fees(
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    today = date.today()
+    overdue_fees = db.query(FeesDB).filter(
+        FeesDB.due_date != None,
+        FeesDB.due_date < today,
+        FeesDB.amount > FeesDB.paid
+    ).all()
+    result = []
+    for f in overdue_fees:
+        student = db.query(StudentDB).filter(StudentDB.id == f.student_id).first()
+        result.append({
+            "fee_id": f.id,
+            "student_id": f.student_id,
+            "student_name": student.name if student else "Unknown",
+            "student_code": student.student_code if student else None,
+            "course": student.course if student else None,
+            "description": f.description,
+            "amount": f.amount,
+            "paid": f.paid,
+            "pending": (f.amount or 0) - (f.paid or 0),
+            "due_date": str(f.due_date),
+            "days_overdue": (today - f.due_date).days
+        })
+    result.sort(key=lambda x: x["days_overdue"], reverse=True)
+    return {"overdue": result}
 
 # ----------------------------------------------------------------------------------------------------
 # STUDENTS
@@ -456,6 +508,22 @@ def update_student(
     db.commit()
     db.refresh(student)
     return {"message": "Student updated", "student": student}
+
+
+@app.put("/students/bulk-update-course")
+def bulk_update_course(
+    data: BulkUpdateCourse,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    updated = 0
+    for sid in data.student_ids:
+        student = db.query(StudentDB).filter(StudentDB.id == sid).first()
+        if student:
+            student.course = data.course
+            updated += 1
+    db.commit()
+    return {"message": f"{updated} student(s) updated", "updated": updated}
 
 
 @app.delete("/delete_student/{student_id}")
@@ -583,18 +651,22 @@ def get_attendance(db: Session = Depends(get_db), user: dict = Depends(get_curre
 @app.get("/attendance/{student_id}")
 def get_student_attendance(
     student_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    # Admin and teacher can view any student
-    # Student can only view their own
     if user["role"] == "student":
         db_user = db.query(UserDB).filter(UserDB.username == user["username"]).first()
         if not db_user or db_user.student_id != student_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
-    records = db.query(AttendanceDB).filter(AttendanceDB.student_id == student_id).all()
-    return {"attendance": records}
+    query = db.query(AttendanceDB).filter(AttendanceDB.student_id == student_id)
+    if start_date:
+        query = query.filter(AttendanceDB.date >= start_date)
+    if end_date:
+        query = query.filter(AttendanceDB.date <= end_date)
+    return {"attendance": query.order_by(AttendanceDB.date.desc()).all()}
 
 
 @app.post("/mark_attendance_bulk")
