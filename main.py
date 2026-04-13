@@ -86,6 +86,8 @@ def run_migrations():
         "UPDATE students SET student_code = CONCAT('STU', LPAD(id::text, 4, '0')) WHERE student_code IS NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_students_student_code ON students(student_code)",
         "ALTER TABLE timetable ADD COLUMN IF NOT EXISTS course_id INTEGER REFERENCES courses(id)",
+        "ALTER TABLE students ALTER COLUMN email DROP NOT NULL",
+        "ALTER TABLE students ALTER COLUMN phone SET NOT NULL",
     ]
     for sql in statements:
         try:
@@ -183,20 +185,20 @@ class UserLogin(BaseModel):
     password: str
 
 class Student(BaseModel):
-    name: str
+    name: str                               # required
+    phone: str                              # required
     father_name: Optional[str] = None
-    dob: date
-    email: str
-    phone: Optional[str] = None
+    dob: Optional[date] = None
+    email: Optional[str] = None
     parent_phone: Optional[str] = None
     permanent_address: Optional[str] = None
     local_address: Optional[str] = None
     course: Optional[str] = None
     fees: Optional[float] = None
     school_college_name: Optional[str] = None
-    medium: Optional[str] = None           # validated on frontend
+    medium: Optional[str] = None
     admission_date: Optional[date] = None
-    photo: Optional[str] = None             # base64 image string
+    photo: Optional[str] = None
 
 class StudentBulk(BaseModel):
     students: List[Student]
@@ -364,7 +366,7 @@ def add_student(
     db: Session = Depends(get_db),
     user: dict = Depends(require_role("admin"))
 ):
-    if db.query(StudentDB).filter(StudentDB.email == student.email).first():
+    if student.email and db.query(StudentDB).filter(StudentDB.email == student.email).first():
         raise HTTPException(status_code=400, detail="Email already exists")
 
     new_student = StudentDB(
@@ -485,7 +487,7 @@ def import_students(
 
     try:
         for student in data.students:
-            if db.query(StudentDB).filter(StudentDB.email == student.email).first():
+            if student.email and db.query(StudentDB).filter(StudentDB.email == student.email).first():
                 skipped += 1
                 continue
 

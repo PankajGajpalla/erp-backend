@@ -10,8 +10,8 @@ class StudentDB(Base):
     name = Column(String(100), nullable=False)
     father_name = Column(String(100), nullable=True)
     dob = Column(Date, nullable=True)
-    email = Column(String(255), unique=True, nullable=False)
-    phone = Column(String(20), nullable=True)           # student mobile
+    email = Column(String(255), unique=True, nullable=True)
+    phone = Column(String(20), nullable=False)          # student mobile — required
     parent_phone = Column(String(20), nullable=True)
     permanent_address = Column(String(500), nullable=True)
     local_address = Column(String(500), nullable=True)
