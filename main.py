@@ -286,6 +286,18 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
     return {"message": f"Account created! Welcome {student.name}"}
 
 
+@app.post("/setup_first_admin")
+def setup_first_admin(user: AdminCreate, db: Session = Depends(get_db)):
+    """Only works when zero admins exist — use this to bootstrap after a DB reset."""
+    existing = db.query(UserDB).filter(UserDB.role == "admin").first()
+    if existing:
+        raise HTTPException(status_code=403, detail="Admin already exists. Use /create_admin instead.")
+    new_admin = UserDB(username=user.username, password=hash_password(user.password), role="admin")
+    db.add(new_admin)
+    db.commit()
+    return {"message": f"Admin '{user.username}' created successfully"}
+
+
 @app.post("/create_admin")
 def create_admin(
     user: AdminCreate,
