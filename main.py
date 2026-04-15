@@ -555,20 +555,36 @@ def import_students(
     db: Session = Depends(get_db),
     user: dict = Depends(require_role("admin"))
 ):
-    imported = skipped = 0
+    imported = 0
+    skipped_duplicate = 0
+    skipped_error = 0
 
-    try:
-        for student in data.students:
-            if student.email and db.query(StudentDB).filter(StudentDB.email == student.email).first():
-                skipped += 1
+    for student in data.students:
+        try:
+            # ── Normalise fields ──────────────────────────────────
+            # Treat empty strings as None so the unique constraint on
+            # email doesn't fire for students that have no email at all
+            email = student.email.strip().lower() if student.email and student.email.strip() else None
+            phone = student.phone.strip() if student.phone else None
+
+            # ── Duplicate checks ──────────────────────────────────
+            # 1. Phone is the primary unique identifier (required field)
+            if phone and db.query(StudentDB).filter(StudentDB.phone == phone).first():
+                skipped_duplicate += 1
                 continue
 
+            # 2. Email — only when actually provided
+            if email and db.query(StudentDB).filter(StudentDB.email == email).first():
+                skipped_duplicate += 1
+                continue
+
+            # ── Insert ────────────────────────────────────────────
             new_student = StudentDB(
                 name=student.name,
                 father_name=student.father_name,
                 dob=student.dob,
-                email=student.email,
-                phone=student.phone,
+                email=email,           # normalised (None if empty)
+                phone=phone,
                 parent_phone=student.parent_phone,
                 permanent_address=student.permanent_address,
                 local_address=student.local_address,
@@ -589,14 +605,22 @@ def import_students(
                     amount=student.fees, paid=0.0,
                     description="Imported Fees"
                 ))
+
+            # Commit each student individually so one failure never
+            # rolls back students that were already successfully saved
+            db.commit()
             imported += 1
 
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=f"Import failed: {str(e)}")
+        except Exception:
+            db.rollback()   # only rolls back this one student
+            skipped_error += 1
 
-    return {"message": "Import complete", "imported": imported, "skipped": skipped}
+    return {
+        "message": f"{imported} imported, {skipped_duplicate} duplicate(s) skipped, {skipped_error} error(s)",
+        "imported": imported,
+        "skipped": skipped_duplicate,
+        "skipped_errors": skipped_error,
+    }
 
 # ----------------------------------------------------------------------------------------------------
 # ATTENDANCE
