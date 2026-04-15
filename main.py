@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, func
 from database import SessionLocal, engine, Base
 from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB
 from pydantic import BaseModel
@@ -568,13 +568,26 @@ def import_students(
             email = student.email.strip().lower() if student.email and student.email.strip() else None
             phone = student.phone.strip() if student.phone else None
 
-            # ── Duplicate checks ──────────────────────────────────
-            # 1. Phone is the primary unique identifier (required field)
-            if phone and db.query(StudentDB).filter(StudentDB.phone == phone).first():
+            # ── Duplicate check ───────────────────────────────────
+            # Base: name (case-insensitive) + phone must both match.
+            # If the incoming row also has dob / email, those must
+            # match too — the more fields provided, the more precise
+            # the match, reducing false positives.
+            dup_query = db.query(StudentDB).filter(
+                func.lower(StudentDB.name) == student.name.strip().lower(),
+                StudentDB.phone == phone
+            )
+            if student.dob:
+                dup_query = dup_query.filter(StudentDB.dob == student.dob)
+            if email:
+                dup_query = dup_query.filter(StudentDB.email == email)
+
+            if dup_query.first():
                 skipped_duplicate += 1
                 continue
 
-            # 2. Email — only when actually provided
+            # Standalone email uniqueness — if a *different* student
+            # already owns this email address, reject to keep email unique.
             if email and db.query(StudentDB).filter(StudentDB.email == email).first():
                 skipped_duplicate += 1
                 continue
