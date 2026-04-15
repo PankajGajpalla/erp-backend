@@ -199,6 +199,7 @@ class Student(BaseModel):
     local_address: Optional[str] = None
     course: Optional[str] = None
     fees: Optional[float] = None
+    fees_paid: Optional[float] = None      # amount already paid at time of import
     school_college_name: Optional[str] = None
     medium: Optional[str] = None
     admission_date: Optional[date] = None
@@ -600,11 +601,28 @@ def import_students(
             new_student.student_code = f"STU{new_student.id:04d}"
 
             if student.fees:
-                db.add(FeesDB(
+                paid_amount = float(student.fees_paid) if student.fees_paid and student.fees_paid > 0 else 0.0
+                # Clamp paid amount so it never exceeds total fees
+                paid_amount = min(paid_amount, float(student.fees))
+
+                fee_record = FeesDB(
                     student_id=new_student.id,
-                    amount=student.fees, paid=0.0,
+                    amount=student.fees,
+                    paid=paid_amount,
                     description="Imported Fees"
-                ))
+                )
+                db.add(fee_record)
+                db.flush()  # get fee_record.id
+
+                # Record the paid amount as a payment history entry
+                if paid_amount > 0:
+                    payment_date = student.admission_date if student.admission_date else date.today()
+                    db.add(FeePaymentDB(
+                        fee_id=fee_record.id,
+                        amount=paid_amount,
+                        paid_date=payment_date,
+                        note="Imported payment"
+                    ))
 
             # Commit each student individually so one failure never
             # rolls back students that were already successfully saved
