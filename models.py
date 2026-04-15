@@ -11,8 +11,8 @@ class StudentDB(Base):
     father_name = Column(String(100), nullable=True)
     dob = Column(Date, nullable=True)
     email = Column(String(255), unique=True, nullable=True)
-    phone = Column(String(20), nullable=False)          # student mobile — required
-    parent_phone = Column(String(20), nullable=True)
+    phone = Column(String(50), nullable=False)           # student mobile — required
+    parent_phone = Column(String(100), nullable=True)   # may contain multiple numbers
     permanent_address = Column(String(500), nullable=True)
     local_address = Column(String(500), nullable=True)
     course = Column(String(100), nullable=True)
@@ -95,7 +95,7 @@ class TeacherDB(Base):
     name = Column(String(100), nullable=False)
     email = Column(String(255), unique=True, nullable=False)
     subject = Column(String(100), nullable=False)
-    phone = Column(String(20), nullable=True)
+    phone = Column(String(50), nullable=True)
 
 
 class GradeDB(Base):

@@ -88,6 +88,10 @@ def run_migrations():
         "ALTER TABLE timetable ADD COLUMN IF NOT EXISTS course_id INTEGER REFERENCES courses(id)",
         "ALTER TABLE students ALTER COLUMN email DROP NOT NULL",
         "ALTER TABLE students ALTER COLUMN phone SET NOT NULL",
+        # Widen phone columns — VARCHAR(20) too short for multiple numbers
+        "ALTER TABLE students ALTER COLUMN phone TYPE VARCHAR(50)",
+        "ALTER TABLE students ALTER COLUMN parent_phone TYPE VARCHAR(100)",
+        "ALTER TABLE teachers ALTER COLUMN phone TYPE VARCHAR(50)",
     ]
     for sql in statements:
         try:
