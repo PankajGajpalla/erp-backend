@@ -408,9 +408,17 @@ def get_overdue_fees(
         FeesDB.due_date < today,
         FeesDB.amount > FeesDB.paid
     ).all()
+
+    if not overdue_fees:
+        return []
+
+    # Batch-load students to avoid N+1
+    student_ids = list({f.student_id for f in overdue_fees})
+    students = {s.id: s for s in db.query(StudentDB).filter(StudentDB.id.in_(student_ids)).all()}
+
     result = []
     for f in overdue_fees:
-        student = db.query(StudentDB).filter(StudentDB.id == f.student_id).first()
+        student = students.get(f.student_id)
         result.append({
             "fee_id": f.id,
             "student_id": f.student_id,
@@ -425,7 +433,7 @@ def get_overdue_fees(
             "days_overdue": (today - f.due_date).days
         })
     result.sort(key=lambda x: x["days_overdue"], reverse=True)
-    return {"overdue": result}
+    return result
 
 # ----------------------------------------------------------------------------------------------------
 # STUDENTS
@@ -471,20 +479,33 @@ def add_student(
     return {"message": "Student saved", "student": new_student}
 
 
-# ── Helper: get additional courses for a student ────────────────
+# ── Helper: get additional courses for a single student (used in single-student endpoints) ──
 def _get_additional_courses(student_id: int, db: Session):
-    rows = db.query(StudentAdditionalCourseDB).filter(
-        StudentAdditionalCourseDB.student_id == student_id
-    ).all()
-    result = []
-    for r in rows:
-        course = db.query(CourseDB).filter(CourseDB.id == r.course_id).first()
-        if course:
-            result.append({"id": course.id, "name": course.name})
+    rows = (
+        db.query(CourseDB.id, CourseDB.name)
+        .join(StudentAdditionalCourseDB, StudentAdditionalCourseDB.course_id == CourseDB.id)
+        .filter(StudentAdditionalCourseDB.student_id == student_id)
+        .all()
+    )
+    return [{"id": cid, "name": cname} for cid, cname in rows]
+
+# ── Batch helper: load additional courses for ALL students in one query ──
+def _build_additional_courses_map(db: Session, student_ids: list = None) -> dict:
+    """Returns {student_id: [{"id": course_id, "name": course_name}, ...]}
+    Pass student_ids to scope to a subset; omit to load for all students."""
+    query = (
+        db.query(StudentAdditionalCourseDB.student_id, CourseDB.id, CourseDB.name)
+        .join(CourseDB, CourseDB.id == StudentAdditionalCourseDB.course_id)
+    )
+    if student_ids is not None:
+        query = query.filter(StudentAdditionalCourseDB.student_id.in_(student_ids))
+    result: dict = {}
+    for sid, cid, cname in query.all():
+        result.setdefault(sid, []).append({"id": cid, "name": cname})
     return result
 
-def _student_dict(s, db: Session):
-    """Return a student as a dict including additional_courses."""
+def _student_dict_from_map(s, ac_map: dict):
+    """Build a student dict using a pre-built additional-courses map (no extra DB call)."""
     return {
         "id": s.id,
         "student_code": s.student_code,
@@ -502,13 +523,20 @@ def _student_dict(s, db: Session):
         "medium": s.medium,
         "admission_date": str(s.admission_date) if s.admission_date else None,
         "photo": s.photo,
-        "additional_courses": _get_additional_courses(s.id, db),
+        "additional_courses": ac_map.get(s.id, []),
     }
+
+def _student_dict(s, db: Session):
+    """Return a student as a dict including additional_courses (single-student use only)."""
+    return _student_dict_from_map(s, {s.id: _get_additional_courses(s.id, db)})
 
 @app.get("/students")
 def get_students(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     students = db.query(StudentDB).all()
-    return {"students": [_student_dict(s, db) for s in students]}
+    if not students:
+        return {"students": []}
+    ac_map = _build_additional_courses_map(db, [s.id for s in students])
+    return {"students": [_student_dict_from_map(s, ac_map) for s in students]}
 
 
 @app.get("/students/search")
@@ -1029,29 +1057,41 @@ def add_teacher(
     return {"message": "Teacher added", "data": new_teacher}
 
 
+def _build_teacher_subjects_map(db: Session) -> dict:
+    """Returns {teacher_id: [{"id", "name", "course_id", "course_name"}, ...]}
+    Loads all subject→course data in two queries instead of N*M."""
+    rows = (
+        db.query(SubjectDB.teacher_id, SubjectDB.id, SubjectDB.name, SubjectDB.course_id, CourseDB.name)
+        .join(CourseDB, CourseDB.id == SubjectDB.course_id, isouter=True)
+        .filter(SubjectDB.teacher_id != None)
+        .all()
+    )
+    result: dict = {}
+    for teacher_id, subj_id, subj_name, course_id, course_name in rows:
+        if teacher_id:
+            result.setdefault(teacher_id, []).append({
+                "id": subj_id,
+                "name": subj_name,
+                "course_id": course_id,
+                "course_name": course_name,
+            })
+    return result
+
 @app.get("/teachers")
 def get_teachers(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     teachers = db.query(TeacherDB).all()
-    result = []
-    for t in teachers:
-        assigned = db.query(SubjectDB).filter(SubjectDB.teacher_id == t.id).all()
-        subject_list = []
-        for s in assigned:
-            course = db.query(CourseDB).filter(CourseDB.id == s.course_id).first()
-            subject_list.append({
-                "id": s.id,
-                "name": s.name,
-                "course_id": s.course_id,
-                "course_name": course.name if course else None
-            })
-        result.append({
+    subjects_map = _build_teacher_subjects_map(db)
+    result = [
+        {
             "id": t.id,
             "name": t.name,
             "email": t.email,
             "subject": t.subject or "",
             "phone": t.phone,
-            "subjects": subject_list
-        })
+            "subjects": subjects_map.get(t.id, []),
+        }
+        for t in teachers
+    ]
     return {"teachers": result}
 
 
@@ -1129,25 +1169,33 @@ def get_students_by_course(
     primary = db.query(StudentDB).filter(StudentDB.course == course).all()
     primary_ids = {s.id for s in primary}
 
-    # Students who have this course as an additional course
+    # Students who have this course as an additional course (batch load)
+    additional: list = []
     course_obj = db.query(CourseDB).filter(CourseDB.name == course).first()
-    additional = []
     if course_obj:
-        rows = db.query(StudentAdditionalCourseDB).filter(
+        add_rows = db.query(StudentAdditionalCourseDB).filter(
             StudentAdditionalCourseDB.course_id == course_obj.id
         ).all()
-        for row in rows:
-            if row.student_id not in primary_ids:
-                s = db.query(StudentDB).filter(StudentDB.id == row.student_id).first()
-                if s:
-                    additional.append(s)
+        add_ids = [r.student_id for r in add_rows if r.student_id not in primary_ids]
+        if add_ids:
+            additional = db.query(StudentDB).filter(StudentDB.id.in_(add_ids)).all()
 
-    def s_dict(s, is_additional=False):
-        d = _student_dict(s, db)
-        d["is_additional"] = is_additional
-        return d
+    all_students = primary + additional
+    if not all_students:
+        return {"students": []}
 
-    result = [s_dict(s, False) for s in primary] + [s_dict(s, True) for s in additional]
+    # Single batch query for all additional-course data
+    ac_map = _build_additional_courses_map(db, [s.id for s in all_students])
+
+    result = []
+    for s in primary:
+        d = _student_dict_from_map(s, ac_map)
+        d["is_additional"] = False
+        result.append(d)
+    for s in additional:
+        d = _student_dict_from_map(s, ac_map)
+        d["is_additional"] = True
+        result.append(d)
     return {"students": result}
 
 
@@ -1162,7 +1210,24 @@ def get_teacher_me(
     teacher = db.query(TeacherDB).filter(TeacherDB.id == db_user.teacher_id).first()
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher profile not found")
-    return teacher
+
+    # Include assigned subjects in one join query
+    rows = (
+        db.query(SubjectDB.id, SubjectDB.name, SubjectDB.course_id, CourseDB.name)
+        .join(CourseDB, CourseDB.id == SubjectDB.course_id, isouter=True)
+        .filter(SubjectDB.teacher_id == teacher.id)
+        .all()
+    )
+    subjects = [{"id": sid, "name": sname, "course_id": cid, "course_name": cname} for sid, sname, cid, cname in rows]
+
+    return {
+        "id": teacher.id,
+        "name": teacher.name,
+        "email": teacher.email,
+        "subject": teacher.subject or "",
+        "phone": teacher.phone,
+        "subjects": subjects,
+    }
 
 
 @app.get("/subjects/teacher/{teacher_id}")
@@ -1171,17 +1236,16 @@ def get_subjects_by_teacher(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    subjects = db.query(SubjectDB).filter(SubjectDB.teacher_id == teacher_id).all()
-    result = []
-    for s in subjects:
-        course = db.query(CourseDB).filter(CourseDB.id == s.course_id).first()
-        result.append({
-            "id": s.id,
-            "name": s.name,
-            "course_id": s.course_id,
-            "course_name": course.name if course else None
-        })
-    return {"subjects": result}
+    rows = (
+        db.query(SubjectDB.id, SubjectDB.name, SubjectDB.course_id, CourseDB.name)
+        .join(CourseDB, CourseDB.id == SubjectDB.course_id, isouter=True)
+        .filter(SubjectDB.teacher_id == teacher_id)
+        .all()
+    )
+    return {"subjects": [
+        {"id": sid, "name": sname, "course_id": cid, "course_name": cname}
+        for sid, sname, cid, cname in rows
+    ]}
 
 
 @app.put("/teachers/{teacher_id}/subjects")
