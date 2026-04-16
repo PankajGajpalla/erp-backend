@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, Float, ForeignKey, UniqueConstraint, Text
+from sqlalchemy import Column, Integer, String, Date, Float, ForeignKey, UniqueConstraint, Text, Boolean
 from database import Base
 
 
@@ -128,3 +128,16 @@ class NoticeDB(Base):
     title = Column(String(200), nullable=False)
     content = Column(String(5000), nullable=False)  # ✅ increased limit
     date = Column(Date, nullable=False)
+
+
+class StudentAdditionalCourseDB(Base):
+    """Many-to-many: a student can opt into multiple additional courses."""
+    __tablename__ = "student_additional_courses"
+
+    __table_args__ = (
+        UniqueConstraint('student_id', 'course_id', name='uq_student_additional_course'),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    course_id  = Column(Integer, ForeignKey("courses.id",  ondelete="CASCADE"), nullable=False)

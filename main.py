@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from database import SessionLocal, engine, Base
-from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB
+from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB, StudentAdditionalCourseDB
 from pydantic import BaseModel
 from fastapi import HTTPException
 from passlib.context import CryptContext
@@ -92,6 +92,13 @@ def run_migrations():
         "ALTER TABLE students ALTER COLUMN phone TYPE VARCHAR(50)",
         "ALTER TABLE students ALTER COLUMN parent_phone TYPE VARCHAR(100)",
         "ALTER TABLE teachers ALTER COLUMN phone TYPE VARCHAR(50)",
+        # Additional courses junction table
+        """CREATE TABLE IF NOT EXISTS student_additional_courses (
+            id SERIAL PRIMARY KEY,
+            student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+            course_id  INTEGER NOT NULL REFERENCES courses(id)  ON DELETE CASCADE,
+            CONSTRAINT uq_student_additional_course UNIQUE (student_id, course_id)
+        )""",
     ]
     for sql in statements:
         try:
@@ -232,8 +239,14 @@ class FeesPayment(BaseModel):
 class TeacherCreate(BaseModel):
     name: str
     email: str
-    subject: str
+    subject: Optional[str] = ""
     phone: Optional[str] = None
+
+class TeacherSubjectsUpdate(BaseModel):
+    subject_ids: List[int]
+
+class StudentAdditionalCoursesUpdate(BaseModel):
+    course_ids: List[int]
 
 class GradeCreate(BaseModel):
     student_id: int
@@ -458,9 +471,78 @@ def add_student(
     return {"message": "Student saved", "student": new_student}
 
 
+# ── Helper: get additional courses for a student ────────────────
+def _get_additional_courses(student_id: int, db: Session):
+    rows = db.query(StudentAdditionalCourseDB).filter(
+        StudentAdditionalCourseDB.student_id == student_id
+    ).all()
+    result = []
+    for r in rows:
+        course = db.query(CourseDB).filter(CourseDB.id == r.course_id).first()
+        if course:
+            result.append({"id": course.id, "name": course.name})
+    return result
+
+def _student_dict(s, db: Session):
+    """Return a student as a dict including additional_courses."""
+    return {
+        "id": s.id,
+        "student_code": s.student_code,
+        "name": s.name,
+        "father_name": s.father_name,
+        "dob": str(s.dob) if s.dob else None,
+        "email": s.email,
+        "phone": s.phone,
+        "parent_phone": s.parent_phone,
+        "permanent_address": s.permanent_address,
+        "local_address": s.local_address,
+        "course": s.course,
+        "fees": s.fees,
+        "school_college_name": s.school_college_name,
+        "medium": s.medium,
+        "admission_date": str(s.admission_date) if s.admission_date else None,
+        "photo": s.photo,
+        "additional_courses": _get_additional_courses(s.id, db),
+    }
+
 @app.get("/students")
 def get_students(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
-    return {"students": db.query(StudentDB).all()}
+    students = db.query(StudentDB).all()
+    return {"students": [_student_dict(s, db) for s in students]}
+
+
+@app.get("/students/search")
+def search_students(
+    q: str = "",
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_roles(["admin", "teacher"]))
+):
+    """Search students by name, phone, or student_code. Returns up to 20 matches."""
+    q = q.strip()
+    if not q:
+        return {"students": []}
+    like = f"%{q}%"
+    results = (
+        db.query(StudentDB)
+        .filter(
+            (func.lower(StudentDB.name).contains(func.lower(q))) |
+            (StudentDB.phone.ilike(like)) |
+            (StudentDB.student_code.ilike(like))
+        )
+        .limit(20)
+        .all()
+    )
+    return {"students": [
+        {
+            "id": s.id,
+            "name": s.name,
+            "phone": s.phone,
+            "student_code": s.student_code,
+            "course": s.course,
+            "email": s.email,
+        }
+        for s in results
+    ]}
 
 
 @app.get("/student/{student_id}")
@@ -468,7 +550,46 @@ def get_student(student_id: int, db: Session = Depends(get_db), user: dict = Dep
     student = db.query(StudentDB).filter(StudentDB.id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    return student
+    return _student_dict(student, db)
+
+
+@app.get("/student/{student_id}/additional-courses")
+def get_additional_courses(
+    student_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    return {"additional_courses": _get_additional_courses(student_id, db)}
+
+
+@app.put("/student/{student_id}/additional-courses")
+def set_additional_courses(
+    student_id: int,
+    data: StudentAdditionalCoursesUpdate,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    student = db.query(StudentDB).filter(StudentDB.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    # Remove existing additional courses for this student
+    db.query(StudentAdditionalCourseDB).filter(
+        StudentAdditionalCourseDB.student_id == student_id
+    ).delete(synchronize_session=False)
+
+    # Add new ones (skip primary course)
+    seen = set()
+    for course_id in data.course_ids:
+        if course_id in seen:
+            continue
+        seen.add(course_id)
+        course = db.query(CourseDB).filter(CourseDB.id == course_id).first()
+        if course and course.name != student.course:
+            db.add(StudentAdditionalCourseDB(student_id=student_id, course_id=course_id))
+
+    db.commit()
+    return {"message": "Additional courses updated", "additional_courses": _get_additional_courses(student_id, db)}
 
 
 @app.put("/update_student/{student_id}")
@@ -900,7 +1021,7 @@ def add_teacher(
 
     new_teacher = TeacherDB(
         name=teacher.name, email=teacher.email,
-        subject=teacher.subject, phone=teacher.phone
+        subject=teacher.subject or "", phone=teacher.phone
     )
     db.add(new_teacher)
     db.commit()
@@ -910,7 +1031,28 @@ def add_teacher(
 
 @app.get("/teachers")
 def get_teachers(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
-    return {"teachers": db.query(TeacherDB).all()}
+    teachers = db.query(TeacherDB).all()
+    result = []
+    for t in teachers:
+        assigned = db.query(SubjectDB).filter(SubjectDB.teacher_id == t.id).all()
+        subject_list = []
+        for s in assigned:
+            course = db.query(CourseDB).filter(CourseDB.id == s.course_id).first()
+            subject_list.append({
+                "id": s.id,
+                "name": s.name,
+                "course_id": s.course_id,
+                "course_name": course.name if course else None
+            })
+        result.append({
+            "id": t.id,
+            "name": t.name,
+            "email": t.email,
+            "subject": t.subject or "",
+            "phone": t.phone,
+            "subjects": subject_list
+        })
+    return {"teachers": result}
 
 
 @app.put("/update_teacher/{teacher_id}")
@@ -926,7 +1068,7 @@ def update_teacher(
 
     teacher.name = updated.name
     teacher.email = updated.email
-    teacher.subject = updated.subject
+    teacher.subject = updated.subject or ""
     teacher.phone = updated.phone
     db.commit()
     db.refresh(teacher)
@@ -983,7 +1125,30 @@ def get_students_by_course(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(["admin", "teacher"]))
 ):
-    return {"students": db.query(StudentDB).filter(StudentDB.course == course).all()}
+    # Primary students
+    primary = db.query(StudentDB).filter(StudentDB.course == course).all()
+    primary_ids = {s.id for s in primary}
+
+    # Students who have this course as an additional course
+    course_obj = db.query(CourseDB).filter(CourseDB.name == course).first()
+    additional = []
+    if course_obj:
+        rows = db.query(StudentAdditionalCourseDB).filter(
+            StudentAdditionalCourseDB.course_id == course_obj.id
+        ).all()
+        for row in rows:
+            if row.student_id not in primary_ids:
+                s = db.query(StudentDB).filter(StudentDB.id == row.student_id).first()
+                if s:
+                    additional.append(s)
+
+    def s_dict(s, is_additional=False):
+        d = _student_dict(s, db)
+        d["is_additional"] = is_additional
+        return d
+
+    result = [s_dict(s, False) for s in primary] + [s_dict(s, True) for s in additional]
+    return {"students": result}
 
 
 @app.get("/teacher/me")
@@ -998,6 +1163,52 @@ def get_teacher_me(
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher profile not found")
     return teacher
+
+
+@app.get("/subjects/teacher/{teacher_id}")
+def get_subjects_by_teacher(
+    teacher_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    subjects = db.query(SubjectDB).filter(SubjectDB.teacher_id == teacher_id).all()
+    result = []
+    for s in subjects:
+        course = db.query(CourseDB).filter(CourseDB.id == s.course_id).first()
+        result.append({
+            "id": s.id,
+            "name": s.name,
+            "course_id": s.course_id,
+            "course_name": course.name if course else None
+        })
+    return {"subjects": result}
+
+
+@app.put("/teachers/{teacher_id}/subjects")
+def assign_subjects_to_teacher(
+    teacher_id: int,
+    data: TeacherSubjectsUpdate,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    teacher = db.query(TeacherDB).filter(TeacherDB.id == teacher_id).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+
+    # Unassign all subjects currently linked to this teacher
+    db.query(SubjectDB).filter(SubjectDB.teacher_id == teacher_id).update(
+        {"teacher_id": None}, synchronize_session=False
+    )
+
+    # Assign the selected subjects
+    if data.subject_ids:
+        db.query(SubjectDB).filter(SubjectDB.id.in_(data.subject_ids)).update(
+            {"teacher_id": teacher_id}, synchronize_session=False
+        )
+
+    db.commit()
+    assigned_count = db.query(SubjectDB).filter(SubjectDB.teacher_id == teacher_id).count()
+    return {"message": "Subjects assigned successfully", "count": assigned_count}
 
 # ----------------------------------------------------------------------------------------------------
 # GRADES
