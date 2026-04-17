@@ -31,7 +31,7 @@ import httpx
 FAST2SMS_API_KEY = os.getenv("FAST2SMS_API_KEY", "")
 DLT_SENDER_ID    = os.getenv("DLT_SENDER_ID",  "ABSFND")
 DLT_PE_ID        = os.getenv("DLT_PE_ID",       "1701158056184830323")
-DLT_TEMPLATE_ID  = os.getenv("DLT_TEMPLATE_ID", "")   # paste from DLT portal
+DLT_TEMPLATE_ID  = os.getenv("DLT_TEMPLATE_ID", "1107177640751779083")
 
 
 async def send_sms(phone: str, message: str) -> bool:
