@@ -50,12 +50,21 @@ async def send_sms(phone: str, message: str) -> bool:
         print("❌ SMS: no phone number — skipping")
         return False
 
-    # Sanitise phone — Fast2SMS expects digits only, no country code prefix
-    clean_phone = "".join(c for c in phone if c.isdigit())
-    if clean_phone.startswith("91") and len(clean_phone) == 12:
-        clean_phone = clean_phone[2:]   # strip leading 91
-    if len(clean_phone) != 10:
-        print(f"❌ SMS: invalid phone number '{phone}' — skipping")
+    # Handle multiple numbers in one field (e.g. "9876543210, 9898989898")
+    # Split by comma, slash, semicolon, or whitespace and pick the first valid number
+    import re as _re
+    parts = _re.split(r"[,/;\s]+", phone.strip())
+    clean_phone = ""
+    for part in parts:
+        digits = "".join(c for c in part if c.isdigit())
+        if digits.startswith("91") and len(digits) == 12:
+            digits = digits[2:]          # strip leading country code
+        if len(digits) == 10:
+            clean_phone = digits
+            break                        # use the first valid number found
+
+    if not clean_phone:
+        print(f"❌ SMS: no valid 10-digit number found in '{phone}' — skipping")
         return False
 
     try:
