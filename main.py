@@ -77,9 +77,10 @@ async def send_sms(phone: str, message: str) -> bool:
                     "route":       "dlt",
                     "sender_id":   DLT_SENDER_ID,
                     "message":     message,
-                    "pe_id":       DLT_PE_ID,
                     "template_id": DLT_TEMPLATE_ID,
                     "numbers":     clean_phone,
+                    "flash":       "0",
+                    "language":    "english",
                 },
                 timeout=10,
             )
