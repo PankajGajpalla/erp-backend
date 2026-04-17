@@ -16,35 +16,69 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import httpx
 
+# ── SMS / DLT configuration ───────────────────────────────────────────────────
+# Set these in your Render (or any hosting) environment variables.
+#
+#   FAST2SMS_API_KEY  — your Fast2SMS API key
+#   DLT_SENDER_ID     — approved DLT header  (default: ABSFND)
+#   DLT_PE_ID         — Principal Entity ID   (default: 1701158056184830323)
+#   DLT_TEMPLATE_ID   — Template ID from the DLT portal (REQUIRED — no default)
+#
+# Approved template:
+#   "Dear Parent, this is to inform you that student {#VAR#} was marked as
+#    {#VAR#} on date {#VAR#}. Regards, -ABS Foundation"
+# ─────────────────────────────────────────────────────────────────────────────
 FAST2SMS_API_KEY = os.getenv("FAST2SMS_API_KEY", "")
+DLT_SENDER_ID    = os.getenv("DLT_SENDER_ID",  "ABSFND")
+DLT_PE_ID        = os.getenv("DLT_PE_ID",       "1701158056184830323")
+DLT_TEMPLATE_ID  = os.getenv("DLT_TEMPLATE_ID", "")   # paste from DLT portal
 
-async def send_sms(phone: str, message: str):
+
+async def send_sms(phone: str, message: str) -> bool:
+    """Send a DLT-compliant transactional SMS via Fast2SMS.
+
+    Returns True if Fast2SMS accepted the request, False otherwise.
+    All failures are logged but never raise — SMS is non-critical.
+    """
     if not FAST2SMS_API_KEY:
-        print("❌ SMS: API key not set!")
+        print("❌ SMS: FAST2SMS_API_KEY not set — skipping")
+        return False
+    if not DLT_TEMPLATE_ID:
+        print("❌ SMS: DLT_TEMPLATE_ID not set — skipping (set it in Render env vars)")
         return False
     if not phone:
-        print("❌ SMS: No phone number provided!")
+        print("❌ SMS: no phone number — skipping")
         return False
+
+    # Sanitise phone — Fast2SMS expects digits only, no country code prefix
+    clean_phone = "".join(c for c in phone if c.isdigit())
+    if clean_phone.startswith("91") and len(clean_phone) == 12:
+        clean_phone = clean_phone[2:]   # strip leading 91
+    if len(clean_phone) != 10:
+        print(f"❌ SMS: invalid phone number '{phone}' — skipping")
+        return False
+
     try:
-        print(f"📱 Sending SMS to {phone}...")
+        print(f"📱 Sending DLT SMS to {clean_phone}…")
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://www.fast2sms.com/dev/bulkV2",
                 headers={"authorization": FAST2SMS_API_KEY},
                 json={
-                    "route": "q",
-                    "message": message,
-                    "language": "english",
-                    "flash": 0,
-                    "numbers": phone
+                    "route":       "dlt",
+                    "sender_id":   DLT_SENDER_ID,
+                    "message":     message,
+                    "pe_id":       DLT_PE_ID,
+                    "template_id": DLT_TEMPLATE_ID,
+                    "numbers":     clean_phone,
                 },
-                timeout=10
+                timeout=10,
             )
             data = response.json()
-            print(f"📱 Fast2SMS response: {data}")
-            return data.get("return", False)
-    except Exception as e:
-        print(f"❌ SMS error: {e}")
+            print(f"📱 Fast2SMS DLT response: {data}")
+            return bool(data.get("return", False))
+    except Exception as exc:
+        print(f"❌ SMS error: {exc}")
         return False
 
 
@@ -970,10 +1004,14 @@ async def mark_attendance_bulk(
         for record in students_to_sms:
             student = student_objs.get(record.student_id)
             if student and student.parent_phone:
+                # Must match approved DLT template exactly:
+                # "Dear Parent, this is to inform you that student {#VAR#}
+                #  was marked as {#VAR#} on date {#VAR#}. Regards, -ABS Foundation"
+                status_str = "PRESENT" if record.status == "present" else "ABSENT"
                 message = (
-                    f"Dear Parent, your child {student.name} has been marked "
-                    f"{'PRESENT' if record.status == 'present' else 'ABSENT'} "
-                    f"on {record.date}. - ERP System"
+                    f"Dear Parent, this is to inform you that student {student.name}"
+                    f" was marked as {status_str}"
+                    f" on date {record.date}. Regards, -ABS Foundation"
                 )
                 sent = await send_sms(student.parent_phone, message)
                 if sent:
