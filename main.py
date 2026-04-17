@@ -99,6 +99,17 @@ def run_migrations():
             course_id  INTEGER NOT NULL REFERENCES courses(id)  ON DELETE CASCADE,
             CONSTRAINT uq_student_additional_course UNIQUE (student_id, course_id)
         )""",
+        # ── Attendance constraint change ──────────────────────────────────────────
+        # Old design: one record per (student, date, subject) — subject is no longer
+        # part of attendance. Collapse to one record per (student, date).
+        # Step 1: deduplicate — keep only the row with the highest id per pair
+        """DELETE FROM attendance WHERE id NOT IN (
+            SELECT MAX(id) FROM attendance GROUP BY student_id, date
+        )""",
+        # Step 2: drop the old three-column unique constraint
+        "ALTER TABLE attendance DROP CONSTRAINT IF EXISTS unique_student_date_subject",
+        # Step 3: add (or restore) the simpler two-column constraint
+        "ALTER TABLE attendance ADD CONSTRAINT IF NOT EXISTS unique_student_date UNIQUE (student_id, date)",
     ]
     for sql in statements:
         try:
@@ -223,7 +234,10 @@ class AttendanceCreate(BaseModel):
     student_id: int
     date: date
     status: Literal["present", "absent"]
-    subject_id: Optional[int] = None
+
+class AttendanceCheckRequest(BaseModel):
+    date: date
+    student_ids: List[int]
 
 class FeesCreate(BaseModel):
     student_id: int
@@ -822,6 +836,25 @@ def attendance_summary(
     }
 
 
+@app.post("/attendance/check")
+def check_attendance_bulk(
+    data: AttendanceCheckRequest,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_roles(["admin", "teacher"]))
+):
+    """Return existing attendance records for a list of students on a given date."""
+    if not data.student_ids:
+        return {"records": []}
+    records = db.query(AttendanceDB).filter(
+        AttendanceDB.date == data.date,
+        AttendanceDB.student_id.in_(data.student_ids)
+    ).all()
+    return {"records": [
+        {"id": r.id, "student_id": r.student_id, "status": r.status}
+        for r in records
+    ]}
+
+
 @app.post("/mark_attendance")
 def mark_attendance(
     attendance: AttendanceCreate,
@@ -834,17 +867,15 @@ def mark_attendance(
     existing = db.query(AttendanceDB).filter(
         AttendanceDB.student_id == attendance.student_id,
         AttendanceDB.date == attendance.date,
-        AttendanceDB.subject_id == attendance.subject_id
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Attendance already marked for this date")
 
-    new_record = AttendanceDB(
+    db.add(AttendanceDB(
         student_id=attendance.student_id,
-        date=attendance.date, status=attendance.status,
-        subject_id=attendance.subject_id
-    )
-    db.add(new_record)
+        date=attendance.date,
+        status=attendance.status,
+    ))
     db.commit()
     return {"message": "Attendance marked"}
 
@@ -883,36 +914,61 @@ async def mark_attendance_bulk(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(["admin", "teacher"]))
 ):
-    print(f"📋 Bulk attendance called with {len(records)} records")
-    marked = updated = 0
-    sms_sent = 0
-    sms_failed = 0
+    """
+    Mark or update attendance for multiple students.
+
+    - One record per (student, date) — subject is no longer tracked.
+    - SMS is sent ONLY on the very first mark for a student on a given date.
+      Subsequent edits/updates never trigger an SMS.
+    - The frontend is expected to send only changed records (new + edited),
+      so unchanged already-marked students are never sent here.
+    """
+    if not records:
+        return {"message": "No records provided", "marked": 0, "updated": 0, "sms_sent": 0, "sms_failed": 0}
+
+    print(f"📋 Bulk attendance: {len(records)} records")
+
+    # Batch-load existing records to avoid N+1
+    student_ids = [r.student_id for r in records]
+    date_val    = records[0].date
+    existing_map = {
+        row.student_id: row
+        for row in db.query(AttendanceDB).filter(
+            AttendanceDB.date == date_val,
+            AttendanceDB.student_id.in_(student_ids)
+        ).all()
+    }
+
+    marked = updated = sms_sent = sms_failed = 0
+    students_to_sms: list[StudentDB] = []   # only first-time marks get SMS
 
     for record in records:
-        existing = db.query(AttendanceDB).filter(
-            AttendanceDB.student_id == record.student_id,
-            AttendanceDB.date == record.date,
-            AttendanceDB.subject_id == record.subject_id
-        ).first()
-
+        existing = existing_map.get(record.student_id)
         if existing:
+            # Update existing record — no SMS
             existing.status = record.status
             updated += 1
         else:
+            # New record — queue SMS
             db.add(AttendanceDB(
                 student_id=record.student_id,
                 date=record.date,
                 status=record.status,
-                subject_id=record.subject_id
             ))
             marked += 1
+            # Collect student for SMS (batch query after commit)
+            students_to_sms.append(record)
 
-        # ✅ Send SMS to parent if marked present
-        if record.status in ["present", "absent"]:
-            student = db.query(StudentDB).filter(
-                StudentDB.id == record.student_id
-            ).first()
+    db.commit()
 
+    # Send SMS only for newly-inserted records
+    if students_to_sms:
+        new_ids = [r.student_id for r in students_to_sms]
+        student_objs = {
+            s.id: s for s in db.query(StudentDB).filter(StudentDB.id.in_(new_ids)).all()
+        }
+        for record in students_to_sms:
+            student = student_objs.get(record.student_id)
             if student and student.parent_phone:
                 message = (
                     f"Dear Parent, your child {student.name} has been marked "
@@ -925,13 +981,12 @@ async def mark_attendance_bulk(
                 else:
                     sms_failed += 1
 
-    db.commit()
     return {
         "message": "Attendance saved",
         "marked": marked,
         "updated": updated,
         "sms_sent": sms_sent,
-        "sms_failed": sms_failed
+        "sms_failed": sms_failed,
     }
 # ----------------------------------------------------------------------------------------------------
 # FEES
