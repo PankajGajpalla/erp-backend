@@ -21,21 +21,27 @@ import httpx
 #
 #   FAST2SMS_API_KEY  — your Fast2SMS API key
 #   DLT_SENDER_ID     — approved DLT header  (default: ABSFND)
-#   DLT_PE_ID         — Principal Entity ID   (default: 1701158056184830323)
-#   DLT_TEMPLATE_ID   — Template ID from the DLT portal (REQUIRED — no default)
+#   DLT_TEMPLATE_ID   — Fast2SMS internal template ID (shown in Fast2SMS DLT panel)
+#                       This is NOT the TRAI template ID — it is the short numeric
+#                       ID Fast2SMS assigns after you register the template there.
+#                       Default: 213770
 #
-# Approved template:
+# Approved template (3 variables — name | status | date):
 #   "Dear Parent, this is to inform you that student {#VAR#} was marked as
 #    {#VAR#} on date {#VAR#}. Regards, -ABS Foundation"
+#
+# API format used: message=<fast2sms_template_id> + variables_values=V1|V2|V3
 # ─────────────────────────────────────────────────────────────────────────────
 FAST2SMS_API_KEY = os.getenv("FAST2SMS_API_KEY", "")
 DLT_SENDER_ID    = os.getenv("DLT_SENDER_ID",  "ABSFND")
-DLT_PE_ID        = os.getenv("DLT_PE_ID",       "1701158056184830323")
-DLT_TEMPLATE_ID  = os.getenv("DLT_TEMPLATE_ID", "1107177640751779083")
+DLT_TEMPLATE_ID  = os.getenv("DLT_TEMPLATE_ID", "213770")
 
 
-async def send_sms(phone: str, message: str) -> bool:
+async def send_sms(phone: str, variables_values: str) -> bool:
     """Send a DLT-compliant transactional SMS via Fast2SMS.
+
+    variables_values: pipe-separated variable substitutions matching the approved
+    template order, e.g. "Rahul Kumar|PRESENT|2025-04-17"
 
     Returns True if Fast2SMS accepted the request, False otherwise.
     All failures are logged but never raise — SMS is non-critical.
@@ -68,19 +74,18 @@ async def send_sms(phone: str, message: str) -> bool:
         return False
 
     try:
-        print(f"📱 Sending DLT SMS to {clean_phone}…")
+        print(f"📱 Sending DLT SMS to {clean_phone} | vars: {variables_values}…")
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://www.fast2sms.com/dev/bulkV2",
                 headers={"authorization": FAST2SMS_API_KEY},
                 json={
-                    "route":       "dlt",
-                    "sender_id":   DLT_SENDER_ID,
-                    "message":     message,
-                    "template_id": DLT_TEMPLATE_ID,
-                    "numbers":     clean_phone,
-                    "flash":       "0",
-                    "language":    "english",
+                    "route":            "dlt",
+                    "sender_id":        DLT_SENDER_ID,
+                    "message":          DLT_TEMPLATE_ID,
+                    "variables_values": variables_values,
+                    "numbers":          clean_phone,
+                    "flash":            "0",
                 },
                 timeout=10,
             )
@@ -120,12 +125,12 @@ def run_migrations():
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS photo TEXT",
         "ALTER TABLE fees ADD COLUMN IF NOT EXISTS due_date DATE",
         "ALTER TABLE attendance ADD COLUMN IF NOT EXISTS subject_id INTEGER REFERENCES subjects(id)",
+        # Drop both old constraints before re-evaluating (safe if they don't exist)
         "ALTER TABLE attendance DROP CONSTRAINT IF EXISTS unique_student_date",
+        "ALTER TABLE attendance DROP CONSTRAINT IF EXISTS unique_student_date_subject",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS test_title VARCHAR(200)",
-        "ALTER TABLE students ALTER COLUMN age DROP NOT NULL",
         "ALTER TABLE students DROP COLUMN IF EXISTS age",
         "ALTER TABLE students DROP COLUMN IF EXISTS address",
-        "ALTER TABLE attendance ADD CONSTRAINT IF NOT EXISTS unique_student_date_subject UNIQUE (student_id, date, subject_id)",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS student_code VARCHAR(20)",
         "UPDATE students SET student_code = CONCAT('STU', LPAD(id::text, 4, '0')) WHERE student_code IS NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_students_student_code ON students(student_code)",
@@ -153,7 +158,11 @@ def run_migrations():
         # Step 2: drop the old three-column unique constraint
         "ALTER TABLE attendance DROP CONSTRAINT IF EXISTS unique_student_date_subject",
         # Step 3: add (or restore) the simpler two-column constraint
-        "ALTER TABLE attendance ADD CONSTRAINT IF NOT EXISTS unique_student_date UNIQUE (student_id, date)",
+        # NOTE: PostgreSQL does NOT support ADD CONSTRAINT IF NOT EXISTS — use a DO block instead
+        """DO $$ BEGIN
+            ALTER TABLE attendance ADD CONSTRAINT unique_student_date UNIQUE (student_id, date);
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$""",
     ]
     for sql in statements:
         try:
@@ -1014,16 +1023,11 @@ async def mark_attendance_bulk(
         for record in students_to_sms:
             student = student_objs.get(record.student_id)
             if student and student.parent_phone:
-                # Must match approved DLT template exactly:
-                # "Dear Parent, this is to inform you that student {#VAR#}
-                #  was marked as {#VAR#} on date {#VAR#}. Regards, -ABS Foundation"
-                status_str = "PRESENT" if record.status == "present" else "ABSENT"
-                message = (
-                    f"Dear Parent, this is to inform you that student {student.name}"
-                    f" was marked as {status_str}"
-                    f" on date {record.date}. Regards, -ABS Foundation"
-                )
-                sent = await send_sms(student.parent_phone, message)
+                # Template variables (pipe-separated) matching approved DLT template:
+                # {#VAR#1} = student name | {#VAR#2} = status | {#VAR#3} = date
+                status_str       = "PRESENT" if record.status == "present" else "ABSENT"
+                variables_values = f"{student.name}|{status_str}|{record.date}"
+                sent = await send_sms(student.parent_phone, variables_values)
                 if sent:
                     sms_sent += 1
                 else:
