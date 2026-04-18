@@ -303,6 +303,11 @@ class FeesPayment(BaseModel):
     paid_date: Optional[date] = None
     note: Optional[str] = None
 
+class FeesUpdate(BaseModel):
+    amount: Optional[float] = None
+    description: Optional[str] = None
+    due_date: Optional[date] = None
+
 class TeacherCreate(BaseModel):
     name: str
     email: str
@@ -1150,6 +1155,51 @@ def get_fee_payments(
             raise HTTPException(status_code=403, detail="Access denied")
     payments = db.query(FeePaymentDB).filter(FeePaymentDB.fee_id == fee_id).order_by(FeePaymentDB.paid_date.desc()).all()
     return {"payments": payments}
+
+
+@app.put("/fees/record/{fee_id}")
+def update_fee_record(
+    fee_id: int,
+    data: FeesUpdate,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    fee = db.query(FeesDB).filter(FeesDB.id == fee_id).first()
+    if not fee:
+        raise HTTPException(status_code=404, detail="Fee record not found")
+    if data.amount is not None:
+        if data.amount < 0:
+            raise HTTPException(status_code=400, detail="Amount cannot be negative")
+        if data.amount < fee.paid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Amount cannot be less than already paid amount (Rs. {fee.paid:.2f})"
+            )
+        fee.amount = data.amount
+    if data.description is not None:
+        fee.description = data.description
+    if data.due_date is not None:
+        fee.due_date = data.due_date
+    db.commit()
+    db.refresh(fee)
+    return {"message": "Fee record updated", "data": fee}
+
+
+@app.delete("/fees/record/{fee_id}")
+def delete_fee_record(
+    fee_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    fee = db.query(FeesDB).filter(FeesDB.id == fee_id).first()
+    if not fee:
+        raise HTTPException(status_code=404, detail="Fee record not found")
+    # Delete child payments first to avoid FK violation
+    db.query(FeePaymentDB).filter(FeePaymentDB.fee_id == fee_id).delete(synchronize_session=False)
+    db.delete(fee)
+    db.commit()
+    return {"message": "Fee record and all its payments deleted"}
+
 
 # ----------------------------------------------------------------------------------------------------
 # TEACHERS
