@@ -612,7 +612,7 @@ def search_students(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(["admin", "teacher"]))
 ):
-    """Search students by name, phone, or student_code. Returns up to 20 matches."""
+    """Search students by name, student_code, email, or phone. Returns up to 20 matches."""
     q = q.strip()
     if not q:
         return {"students": []}
@@ -621,8 +621,10 @@ def search_students(
         db.query(StudentDB)
         .filter(
             (func.lower(StudentDB.name).contains(func.lower(q))) |
+            (StudentDB.student_code.ilike(like)) |
+            (StudentDB.email.ilike(like)) |
             (StudentDB.phone.ilike(like)) |
-            (StudentDB.student_code.ilike(like))
+            (StudentDB.parent_phone.ilike(like))
         )
         .limit(20)
         .all()
