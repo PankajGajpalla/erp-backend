@@ -759,10 +759,17 @@ def delete_student(
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    db.query(UserDB).filter(UserDB.student_id == student_id).delete()
-    db.query(FeesDB).filter(FeesDB.student_id == student_id).delete()
-    db.query(AttendanceDB).filter(AttendanceDB.student_id == student_id).delete()
-    db.query(GradeDB).filter(GradeDB.student_id == student_id).delete()
+    # Delete in FK-safe order: child rows first, then parent rows
+    # 1. fee_payments references fees → must go before fees
+    fee_ids = [f.id for f in db.query(FeesDB.id).filter(FeesDB.student_id == student_id).all()]
+    if fee_ids:
+        db.query(FeePaymentDB).filter(FeePaymentDB.fee_id.in_(fee_ids)).delete(synchronize_session=False)
+    db.query(FeesDB).filter(FeesDB.student_id == student_id).delete(synchronize_session=False)
+    # 2. Other child tables
+    db.query(AttendanceDB).filter(AttendanceDB.student_id == student_id).delete(synchronize_session=False)
+    db.query(GradeDB).filter(GradeDB.student_id == student_id).delete(synchronize_session=False)
+    db.query(UserDB).filter(UserDB.student_id == student_id).delete(synchronize_session=False)
+    # 3. Finally delete the student
     db.delete(student)
     db.commit()
     return {"message": "Student and all related data deleted"}
