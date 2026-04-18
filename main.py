@@ -1675,7 +1675,15 @@ def add_subject(
 
 @app.get("/subjects")
 def get_all_subjects(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
-    return {"subjects": db.query(SubjectDB).all()}
+    rows = (
+        db.query(SubjectDB.id, SubjectDB.name, SubjectDB.course_id, CourseDB.name, SubjectDB.teacher_id)
+        .join(CourseDB, CourseDB.id == SubjectDB.course_id, isouter=True)
+        .all()
+    )
+    return {"subjects": [
+        {"id": sid, "name": sname, "course_id": cid, "course_name": cname, "teacher_id": tid}
+        for sid, sname, cid, cname, tid in rows
+    ]}
 
 
 @app.get("/subjects/course/{course_id}")
