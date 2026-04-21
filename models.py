@@ -86,6 +86,7 @@ class FeePaymentDB(Base):
     amount = Column(Float, nullable=False)        # amount paid in this transaction
     paid_date = Column(Date, nullable=False)      # date of this payment
     note = Column(String(200), nullable=True)     # e.g. "Cash", "Online", receipt no.
+    payment_mode = Column(String(50), nullable=True)
 
 
 class TeacherDB(Base):
@@ -173,3 +174,14 @@ class AuditLogDB(Base):
     entity_id = Column(Integer, nullable=True)
     details = Column(Text, nullable=True)                # JSON or short description
     timestamp = Column(String(50), nullable=False)       # ISO string
+
+
+class NoticeReadDB(Base):
+    __tablename__ = "notice_reads"
+    __table_args__ = (
+        UniqueConstraint('notice_id', 'user_id', name='uq_notice_read'),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    notice_id = Column(Integer, ForeignKey("notices.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    read_at = Column(String(50), nullable=False)

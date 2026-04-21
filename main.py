@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from database import SessionLocal, engine, Base
-from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB, StudentAdditionalCourseDB, FeeTemplateDB, ExamScheduleDB, AuditLogDB
+from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB, StudentAdditionalCourseDB, FeeTemplateDB, ExamScheduleDB, AuditLogDB, NoticeReadDB
 from pydantic import BaseModel
 from fastapi import HTTPException
 from passlib.context import CryptContext
@@ -191,6 +191,14 @@ def run_migrations():
             details TEXT,
             timestamp VARCHAR(50) NOT NULL
         )""",
+        "ALTER TABLE fee_payments ADD COLUMN IF NOT EXISTS payment_mode VARCHAR(50)",
+        """CREATE TABLE IF NOT EXISTS notice_reads (
+            id SERIAL PRIMARY KEY,
+            notice_id INTEGER REFERENCES notices(id) ON DELETE CASCADE,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            read_at VARCHAR(50) NOT NULL,
+            CONSTRAINT uq_notice_read UNIQUE (notice_id, user_id)
+        )""",
     ]
     for sql in statements:
         try:
@@ -345,6 +353,7 @@ class FeesPayment(BaseModel):
     pay_amount: float
     paid_date: Optional[date] = None
     note: Optional[str] = None
+    payment_mode: Optional[str] = None
 
 class FeesUpdate(BaseModel):
     amount: Optional[float] = None
@@ -556,6 +565,36 @@ def dashboard_summary(
         FeesDB.amount > FeesDB.paid
     ).count()
 
+    # Total teachers
+    total_teachers = db.query(TeacherDB).count()
+
+    # Today's attendance percentage
+    today_records = db.query(AttendanceDB).filter(AttendanceDB.date == today).all()
+    att_present = sum(1 for r in today_records if r.status == "present")
+    att_absent = sum(1 for r in today_records if r.status == "absent")
+    att_total = att_present + att_absent
+    att_pct = round((att_present / att_total * 100) if att_total > 0 else 0, 1)
+    attendance_today_pct = {"present": att_present, "absent": att_absent, "pct": att_pct}
+
+    # Upcoming exams (next 7 days)
+    week_later = today + timedelta(days=7)
+    upcoming_exams_q = db.query(ExamScheduleDB).filter(
+        ExamScheduleDB.exam_date >= today,
+        ExamScheduleDB.exam_date <= week_later
+    ).order_by(ExamScheduleDB.exam_date).limit(5).all()
+    upcoming_exams = [
+        {"id": e.id, "title": e.title, "subject": e.subject,
+         "exam_date": str(e.exam_date), "exam_time": e.exam_time, "course_id": e.course_id}
+        for e in upcoming_exams_q
+    ]
+
+    # Recent notices (last 5)
+    recent_notices_q = db.query(NoticeDB).order_by(NoticeDB.date.desc()).limit(5).all()
+    recent_notices = [
+        {"id": n.id, "title": n.title, "date": str(n.date), "course": n.course}
+        for n in recent_notices_q
+    ]
+
     return {
         "total_students": total_students,
         "total_attendance": total_attendance,
@@ -563,7 +602,11 @@ def dashboard_summary(
         "total_paid": total_paid,
         "total_pending": total_fees - total_paid,
         "overdue_fees_count": overdue_count,
-        "course_stats": course_stats
+        "course_stats": course_stats,
+        "total_teachers": total_teachers,
+        "attendance_today_pct": attendance_today_pct,
+        "upcoming_exams": upcoming_exams,
+        "recent_notices": recent_notices,
     }
 
 
@@ -1244,7 +1287,8 @@ def pay_fees(
         fee_id=fee_id,
         amount=payment.pay_amount,
         paid_date=payment.paid_date or date.today(),
-        note=payment.note
+        note=payment.note,
+        payment_mode=payment.payment_mode
     ))
     db.commit()
     db.refresh(fee)
@@ -1846,16 +1890,18 @@ def get_notices(db: Session = Depends(get_db), user: dict = Depends(get_current_
         else:
             q = q.filter(NoticeDB.course == None)
     notices = q.order_by(NoticeDB.date.desc()).all()
-    return {"notices": [
-        {
-            "id": n.id,
-            "title": n.title,
-            "content": n.content,
-            "date": str(n.date),
-            "course": n.course,
-        }
-        for n in notices
-    ]}
+
+    # Batch load read counts for admin
+    read_counts = {}
+    if user["role"] == "admin":
+        counts = db.query(NoticeReadDB.notice_id, func.count(NoticeReadDB.id).label("cnt")).group_by(NoticeReadDB.notice_id).all()
+        read_counts = {c.notice_id: c.cnt for c in counts}
+
+    result = []
+    for n in notices:
+        item = {"id": n.id, "title": n.title, "content": n.content, "date": str(n.date), "course": n.course, "read_count": read_counts.get(n.id, 0)}
+        result.append(item)
+    return {"notices": result}
 
 
 @app.delete("/delete_notice/{notice_id}")
@@ -1870,6 +1916,32 @@ def delete_notice(
     db.delete(notice)
     db.commit()
     return {"message": "Notice deleted"}
+
+
+@app.post("/notices/{notice_id}/read")
+def mark_notice_read(notice_id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    db_user = db.query(UserDB).filter(UserDB.username == user["username"]).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Upsert — ignore if already exists
+    existing = db.query(NoticeReadDB).filter(NoticeReadDB.notice_id == notice_id, NoticeReadDB.user_id == db_user.id).first()
+    if not existing:
+        from datetime import datetime
+        db.add(NoticeReadDB(notice_id=notice_id, user_id=db_user.id, read_at=datetime.utcnow().isoformat()))
+        db.commit()
+    return {"message": "Marked as read"}
+
+
+@app.get("/notices/{notice_id}/reads")
+def get_notice_reads(notice_id: int, db: Session = Depends(get_db), user: dict = Depends(require_role("admin"))):
+    reads = db.query(NoticeReadDB).filter(NoticeReadDB.notice_id == notice_id).all()
+    user_ids = [r.user_id for r in reads]
+    users = {u.id: u for u in db.query(UserDB).filter(UserDB.id.in_(user_ids)).all()}
+    return {
+        "count": len(reads),
+        "reads": [{"username": users[r.user_id].username, "role": users[r.user_id].role, "read_at": r.read_at} for r in reads if r.user_id in users]
+    }
+
 
 # ----------------------------------------------------------------------------------------------------
 # COURSES
@@ -2060,6 +2132,39 @@ def subject_wise_attendance(
         result.append(s)
 
     return {"subjects": result}
+
+
+@app.get("/attendance/heatmap/{student_id}")
+def get_attendance_heatmap(
+    student_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    # Students can only view their own
+    if user["role"] == "student":
+        db_user = db.query(UserDB).filter(UserDB.username == user["username"]).first()
+        if not db_user or db_user.student_id != student_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    # Last 90 days
+    end_date = date.today()
+    start_date = end_date - timedelta(days=90)
+
+    records = db.query(AttendanceDB).filter(
+        AttendanceDB.student_id == student_id,
+        AttendanceDB.date >= start_date,
+        AttendanceDB.date <= end_date
+    ).all()
+
+    # Build a dict: "YYYY-MM-DD" -> "present"/"absent"
+    # If multiple records for same date (different subjects), prefer "present"
+    heatmap = {}
+    for r in records:
+        key = str(r.date)
+        if key not in heatmap or r.status == "present":
+            heatmap[key] = r.status
+
+    return {"heatmap": heatmap, "start_date": str(start_date), "end_date": str(end_date)}
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -2268,4 +2373,67 @@ def get_audit_logs(
             "details": l.details, "timestamp": l.timestamp
         }
         for l in logs
+    ]}
+
+
+# ----------------------------------------------------------------------------------------------------
+# DATA EXPORT
+
+@app.get("/export/students")
+def export_students(db: Session = Depends(get_db), user: dict = Depends(require_role("admin"))):
+    students = db.query(StudentDB).all()
+    return {"students": [
+        {"ID": s.id, "Student Code": s.student_code, "Name": s.name, "Father Name": s.father_name,
+         "DOB": str(s.dob) if s.dob else "", "Email": s.email or "", "Phone": s.phone,
+         "Parent Phone": s.parent_phone or "", "Course": s.course or "", "Fees": s.fees or 0,
+         "Admission Date": str(s.admission_date) if s.admission_date else "",
+         "School/College": s.school_college_name or "", "Medium": s.medium or ""}
+        for s in students
+    ]}
+
+
+@app.get("/export/fees")
+def export_fees(db: Session = Depends(get_db), user: dict = Depends(require_role("admin"))):
+    fees = db.query(FeesDB).all()
+    student_ids = list({f.student_id for f in fees})
+    students = {s.id: s for s in db.query(StudentDB).filter(StudentDB.id.in_(student_ids)).all()}
+    return {"fees": [
+        {"Fee ID": f.id, "Student Name": students.get(f.student_id, StudentDB()).name or "",
+         "Student Code": students.get(f.student_id, StudentDB()).student_code or "",
+         "Course": students.get(f.student_id, StudentDB()).course or "",
+         "Amount": f.amount, "Paid": f.paid, "Pending": f.amount - f.paid,
+         "Description": f.description or "", "Due Date": str(f.due_date) if f.due_date else "",
+         "Status": "Paid" if f.paid >= f.amount else "Pending"}
+        for f in fees
+    ]}
+
+
+@app.get("/export/attendance")
+def export_attendance(db: Session = Depends(get_db), user: dict = Depends(require_role("admin"))):
+    records = db.query(AttendanceDB).order_by(AttendanceDB.date.desc()).limit(10000).all()
+    student_ids = list({r.student_id for r in records})
+    students = {s.id: s for s in db.query(StudentDB).filter(StudentDB.id.in_(student_ids)).all()}
+    return {"attendance": [
+        {"Date": str(r.date), "Student Name": students.get(r.student_id, StudentDB()).name or "",
+         "Student Code": students.get(r.student_id, StudentDB()).student_code or "",
+         "Course": students.get(r.student_id, StudentDB()).course or "",
+         "Status": r.status}
+        for r in records
+    ]}
+
+
+@app.get("/export/payments")
+def export_payments(db: Session = Depends(get_db), user: dict = Depends(require_role("admin"))):
+    payments = db.query(FeePaymentDB).order_by(FeePaymentDB.paid_date.desc()).all()
+    fee_ids = list({p.fee_id for p in payments})
+    fees = {f.id: f for f in db.query(FeesDB).filter(FeesDB.id.in_(fee_ids)).all()}
+    student_ids = list({f.student_id for f in fees.values()})
+    students = {s.id: s for s in db.query(StudentDB).filter(StudentDB.id.in_(student_ids)).all()}
+    return {"payments": [
+        {"Payment ID": p.id, "Date": str(p.paid_date),
+         "Student Name": students.get(fees[p.fee_id].student_id, StudentDB()).name if p.fee_id in fees else "",
+         "Amount Paid": p.amount, "Mode": p.payment_mode or p.note or "—",
+         "Description": fees[p.fee_id].description if p.fee_id in fees else "",
+         "Fee Total": fees[p.fee_id].amount if p.fee_id in fees else 0}
+        for p in payments if p.fee_id in fees
     ]}
