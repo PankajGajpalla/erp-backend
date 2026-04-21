@@ -414,6 +414,60 @@ def create_admin(
     return {"message": f"Admin '{user.username}' created successfully"}
 
 
+# ── List all admin accounts ────────────────────────────────────
+@app.get("/admins")
+def list_admins(
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_role("admin"))
+):
+    admins = db.query(UserDB).filter(UserDB.role == "admin").all()
+    return {"admins": [{"id": a.id, "username": a.username} for a in admins]}
+
+
+# ── Update admin username / password ──────────────────────────
+@app.put("/admins/{admin_id}")
+def update_admin(
+    admin_id: int,
+    data: CredentialsUpdate,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_role("admin"))
+):
+    admin = db.query(UserDB).filter(UserDB.id == admin_id, UserDB.role == "admin").first()
+    if not admin:
+        raise HTTPException(status_code=404, detail="Admin not found")
+
+    # Username uniqueness check (exclude self)
+    clash = db.query(UserDB).filter(UserDB.username == data.username, UserDB.id != admin_id).first()
+    if clash:
+        raise HTTPException(status_code=400, detail="Username already taken by another account")
+
+    admin.username = data.username
+    if data.password:
+        admin.password = hash_password(data.password)
+    db.commit()
+    return {"message": f"Admin '{data.username}' updated successfully"}
+
+
+# ── Delete an admin account (cannot delete self) ───────────────
+@app.delete("/admins/{admin_id}")
+def delete_admin(
+    admin_id: int,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_role("admin"))
+):
+    admin = db.query(UserDB).filter(UserDB.id == admin_id, UserDB.role == "admin").first()
+    if not admin:
+        raise HTTPException(status_code=404, detail="Admin not found")
+
+    # Prevent deleting yourself
+    if admin.username == current["username"]:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+
+    db.delete(admin)
+    db.commit()
+    return {"message": f"Admin '{admin.username}' deleted"}
+
+
 @app.post("/login")
 def login(user: UserLogin, db: Session = Depends(get_db)):
     db_user = db.query(UserDB).filter(UserDB.username == user.username).first()
