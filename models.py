@@ -128,6 +128,7 @@ class NoticeDB(Base):
     title = Column(String(200), nullable=False)
     content = Column(String(5000), nullable=False)  # ✅ increased limit
     date = Column(Date, nullable=False)
+    course = Column(String(100), nullable=True)   # null = visible to all
 
 
 class StudentAdditionalCourseDB(Base):
@@ -141,3 +142,34 @@ class StudentAdditionalCourseDB(Base):
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
     course_id  = Column(Integer, ForeignKey("courses.id",  ondelete="CASCADE"), nullable=False)
+
+
+class FeeTemplateDB(Base):
+    __tablename__ = "fee_templates"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), nullable=False)          # e.g. "Monthly Fee - BCA"
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=True)  # null = all courses
+    amount = Column(Float, nullable=False)
+    description = Column(String(200), nullable=True)
+
+class ExamScheduleDB(Base):
+    __tablename__ = "exam_schedule"
+    id = Column(Integer, primary_key=True, index=True)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
+    title = Column(String(200), nullable=False)          # e.g. "Unit Test 1"
+    subject = Column(String(200), nullable=False)
+    exam_date = Column(Date, nullable=False)
+    exam_time = Column(String(50), nullable=True)        # e.g. "10:00 AM"
+    duration = Column(String(50), nullable=True)         # e.g. "2 Hours"
+    syllabus = Column(Text, nullable=True)
+    total_marks = Column(Float, nullable=True)
+
+class AuditLogDB(Base):
+    __tablename__ = "audit_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    performed_by = Column(String(100), nullable=False)   # username
+    action = Column(String(50), nullable=False)          # CREATE / UPDATE / DELETE
+    entity = Column(String(100), nullable=False)         # e.g. "Student", "Fee"
+    entity_id = Column(Integer, nullable=True)
+    details = Column(Text, nullable=True)                # JSON or short description
+    timestamp = Column(String(50), nullable=False)       # ISO string

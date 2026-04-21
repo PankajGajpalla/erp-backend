@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from database import SessionLocal, engine, Base
-from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB, StudentAdditionalCourseDB
+from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB, StudentAdditionalCourseDB, FeeTemplateDB, ExamScheduleDB, AuditLogDB
 from pydantic import BaseModel
 from fastapi import HTTPException
 from passlib.context import CryptContext
@@ -163,6 +163,34 @@ def run_migrations():
             ALTER TABLE attendance ADD CONSTRAINT unique_student_date UNIQUE (student_id, date);
         EXCEPTION WHEN duplicate_object THEN NULL;
         END $$""",
+        "ALTER TABLE notices ADD COLUMN IF NOT EXISTS course VARCHAR(100)",
+        """CREATE TABLE IF NOT EXISTS fee_templates (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(200) NOT NULL,
+            course_id INTEGER REFERENCES courses(id),
+            amount FLOAT NOT NULL,
+            description VARCHAR(200)
+        )""",
+        """CREATE TABLE IF NOT EXISTS exam_schedule (
+            id SERIAL PRIMARY KEY,
+            course_id INTEGER NOT NULL REFERENCES courses(id),
+            title VARCHAR(200) NOT NULL,
+            subject VARCHAR(200) NOT NULL,
+            exam_date DATE NOT NULL,
+            exam_time VARCHAR(50),
+            duration VARCHAR(50),
+            syllabus TEXT,
+            total_marks FLOAT
+        )""",
+        """CREATE TABLE IF NOT EXISTS audit_logs (
+            id SERIAL PRIMARY KEY,
+            performed_by VARCHAR(100) NOT NULL,
+            action VARCHAR(50) NOT NULL,
+            entity VARCHAR(100) NOT NULL,
+            entity_id INTEGER,
+            details TEXT,
+            timestamp VARCHAR(50) NOT NULL
+        )""",
     ]
     for sql in statements:
         try:
@@ -191,6 +219,21 @@ def hash_password(password: str):
 
 def verify_password(plain, hashed):
     return pwd_context.verify(plain, hashed)
+
+def log_audit(db: Session, performed_by: str, action: str, entity: str, entity_id: int = None, details: str = None):
+    """Log an admin action to the audit trail."""
+    try:
+        db.add(AuditLogDB(
+            performed_by=performed_by,
+            action=action,
+            entity=entity,
+            entity_id=entity_id,
+            details=details,
+            timestamp=datetime.now().isoformat()
+        ))
+        db.commit()
+    except Exception as e:
+        print(f"Audit log error: {e}")
 
 # JWT CONFIG
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret")
@@ -337,7 +380,8 @@ class TimetableCreate(BaseModel):
 class NoticeCreate(BaseModel):
     title: str
     content: str
-    date: date
+    date: Optional[date] = None
+    course: Optional[str] = None   # null = all courses
 
 class CourseCreate(BaseModel):
     name: str
@@ -602,6 +646,10 @@ def add_student(
 
     db.commit()
     db.refresh(new_student)
+    try:
+        log_audit(db, user["username"], "CREATE", "Student", new_student.id, new_student.name)
+    except Exception as e:
+        print(f"Audit log error: {e}")
     return {"message": "Student saved", "student": new_student}
 
 
@@ -817,6 +865,11 @@ def delete_student(
     student = db.query(StudentDB).filter(StudentDB.id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
+
+    try:
+        log_audit(db, user["username"], "DELETE", "Student", student_id, student.name)
+    except Exception as e:
+        print(f"Audit log error: {e}")
 
     # Delete in FK-safe order: child rows first, then parent rows
     # 1. fee_payments references fees → must go before fees
@@ -1129,6 +1182,10 @@ def add_fees(
     db.add(new_fee)
     db.commit()
     db.refresh(new_fee)
+    try:
+        log_audit(db, user["username"], "CREATE", "Fee", new_fee.id, f"Rs.{fees.amount} for student {fees.student_id}")
+    except Exception as e:
+        print(f"Audit log error: {e}")
     return {"message": "Fees added", "data": new_fee}
 
 
@@ -1248,6 +1305,10 @@ def delete_fee_record(
     fee = db.query(FeesDB).filter(FeesDB.id == fee_id).first()
     if not fee:
         raise HTTPException(status_code=404, detail="Fee record not found")
+    try:
+        log_audit(db, user["username"], "DELETE", "Fee", fee_id, f"Rs.{fee.amount}")
+    except Exception as e:
+        print(f"Audit log error: {e}")
     # Delete child payments first to avoid FK violation
     db.query(FeePaymentDB).filter(FeePaymentDB.fee_id == fee_id).delete(synchronize_session=False)
     db.delete(fee)
@@ -1274,6 +1335,10 @@ def add_teacher(
     db.add(new_teacher)
     db.commit()
     db.refresh(new_teacher)
+    try:
+        log_audit(db, user["username"], "CREATE", "Teacher", new_teacher.id, teacher.name)
+    except Exception as e:
+        print(f"Audit log error: {e}")
     return {"message": "Teacher added", "data": new_teacher}
 
 
@@ -1345,6 +1410,11 @@ def delete_teacher(
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher not found")
 
+    try:
+        log_audit(db, user["username"], "DELETE", "Teacher", teacher_id, teacher.name)
+    except Exception as e:
+        print(f"Audit log error: {e}")
+
     # ✅ Also delete teacher's user account
     db.query(UserDB).filter(UserDB.teacher_id == teacher_id).delete()
     db.delete(teacher)
@@ -1395,6 +1465,28 @@ def get_teacher_credentials(
 class CredentialsUpdate(BaseModel):
     username: str
     password: Optional[str] = None   # if None, keep existing password
+
+class BulkFeeCreate(BaseModel):
+    course_name: str
+    amount: float
+    description: Optional[str] = None
+    due_date: Optional[date] = None
+
+class FeeTemplateCreate(BaseModel):
+    name: str
+    course_id: Optional[int] = None
+    amount: float
+    description: Optional[str] = None
+
+class ExamScheduleCreate(BaseModel):
+    course_id: int
+    title: str
+    subject: str
+    exam_date: date
+    exam_time: Optional[str] = None
+    duration: Optional[str] = None
+    syllabus: Optional[str] = None
+    total_marks: Optional[float] = None
 
 
 # ── Update (or create) teacher login ──────────────────────────────────────
@@ -1711,24 +1803,59 @@ def delete_timetable(
 
 @app.post("/add_notice")
 def add_notice(
-    notice: NoticeCreate,
+    data: NoticeCreate,
     db: Session = Depends(get_db),
     user: dict = Depends(require_role("admin"))
 ):
     new_notice = NoticeDB(
-        title=notice.title,
-        content=notice.content,
-        date=notice.date
+        title=data.title,
+        content=data.content,
+        date=data.date or date.today(),
+        course=data.course,
     )
     db.add(new_notice)
     db.commit()
     db.refresh(new_notice)
-    return {"message": "Notice added", "data": new_notice}
+    try:
+        log_audit(db, user["username"], "CREATE", "Notice", new_notice.id, f"Title: {data.title}")
+    except Exception as e:
+        print(f"Audit log error: {e}")
+    return {"message": "Notice added", "data": {
+        "id": new_notice.id,
+        "title": new_notice.title,
+        "content": new_notice.content,
+        "date": str(new_notice.date),
+        "course": new_notice.course,
+    }}
 
 
 @app.get("/notices")
 def get_notices(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
-    return {"notices": db.query(NoticeDB).order_by(NoticeDB.date.desc()).all()}
+    q = db.query(NoticeDB)
+    if user["role"] == "student":
+        # Students see notices that are global (course IS NULL) or targeted at their course
+        student_course = None
+        if user.get("student_id"):
+            student = db.query(StudentDB).filter(StudentDB.id == user["student_id"]).first()
+            if student:
+                student_course = student.course
+        if student_course:
+            q = q.filter(
+                (NoticeDB.course == None) | (NoticeDB.course == student_course)
+            )
+        else:
+            q = q.filter(NoticeDB.course == None)
+    notices = q.order_by(NoticeDB.date.desc()).all()
+    return {"notices": [
+        {
+            "id": n.id,
+            "title": n.title,
+            "content": n.content,
+            "date": str(n.date),
+            "course": n.course,
+        }
+        for n in notices
+    ]}
 
 
 @app.delete("/delete_notice/{notice_id}")
@@ -1933,3 +2060,212 @@ def subject_wise_attendance(
         result.append(s)
 
     return {"subjects": result}
+
+
+# ----------------------------------------------------------------------------------------------------
+# BULK FEES
+
+@app.post("/fees/bulk")
+def add_fees_bulk(
+    data: BulkFeeCreate,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    """Add a fee record to all students enrolled in a course."""
+    # Find all students in the course (primary + additional)
+    primary = db.query(StudentDB).filter(StudentDB.course == data.course_name).all()
+    primary_ids = {s.id for s in primary}
+
+    course_obj = db.query(CourseDB).filter(CourseDB.name == data.course_name).first()
+    additional = []
+    if course_obj:
+        add_rows = db.query(StudentAdditionalCourseDB).filter(
+            StudentAdditionalCourseDB.course_id == course_obj.id
+        ).all()
+        add_ids = [r.student_id for r in add_rows if r.student_id not in primary_ids]
+        if add_ids:
+            additional = db.query(StudentDB).filter(StudentDB.id.in_(add_ids)).all()
+
+    all_students = list(primary) + additional
+    if not all_students:
+        raise HTTPException(status_code=404, detail=f"No students found in course '{data.course_name}'")
+
+    count = 0
+    for student in all_students:
+        db.add(FeesDB(
+            student_id=student.id,
+            amount=data.amount,
+            paid=0.0,
+            description=data.description,
+            due_date=data.due_date,
+        ))
+        count += 1
+
+    db.commit()
+    try:
+        log_audit(db, user["username"], "CREATE", "BulkFee", None,
+                  f"Added fee Rs.{data.amount} to {count} students in {data.course_name}")
+    except Exception as e:
+        print(f"Audit log error: {e}")
+    return {"message": f"Fee added to {count} students in {data.course_name}", "count": count}
+
+
+# ----------------------------------------------------------------------------------------------------
+# FEE TEMPLATES
+
+@app.get("/fee-templates")
+def get_fee_templates(db: Session = Depends(get_db), user: dict = Depends(require_role("admin"))):
+    templates = db.query(FeeTemplateDB).all()
+    result = []
+    for t in templates:
+        course_name = None
+        if t.course_id:
+            c = db.query(CourseDB).filter(CourseDB.id == t.course_id).first()
+            course_name = c.name if c else None
+        result.append({
+            "id": t.id, "name": t.name, "course_id": t.course_id,
+            "course_name": course_name, "amount": t.amount, "description": t.description
+        })
+    return {"templates": result}
+
+
+@app.post("/fee-templates")
+def create_fee_template(
+    data: FeeTemplateCreate,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    t = FeeTemplateDB(name=data.name, course_id=data.course_id, amount=data.amount, description=data.description)
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    try:
+        log_audit(db, user["username"], "CREATE", "FeeTemplate", t.id, f"Template: {data.name}")
+    except Exception as e:
+        print(f"Audit log error: {e}")
+    return {"message": "Template created", "id": t.id}
+
+
+@app.delete("/fee-templates/{template_id}")
+def delete_fee_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    t = db.query(FeeTemplateDB).filter(FeeTemplateDB.id == template_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Template not found")
+    try:
+        log_audit(db, user["username"], "DELETE", "FeeTemplate", template_id, f"Template: {t.name}")
+    except Exception as e:
+        print(f"Audit log error: {e}")
+    db.delete(t)
+    db.commit()
+    return {"message": "Template deleted"}
+
+
+# ----------------------------------------------------------------------------------------------------
+# EXAM SCHEDULE
+
+@app.get("/exam-schedule")
+def get_exam_schedule(
+    course_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    q = db.query(ExamScheduleDB)
+    if course_id:
+        q = q.filter(ExamScheduleDB.course_id == course_id)
+    exams = q.order_by(ExamScheduleDB.exam_date).all()
+    result = []
+    for e in exams:
+        c = db.query(CourseDB).filter(CourseDB.id == e.course_id).first()
+        result.append({
+            "id": e.id, "course_id": e.course_id,
+            "course_name": c.name if c else None,
+            "title": e.title, "subject": e.subject,
+            "exam_date": str(e.exam_date), "exam_time": e.exam_time,
+            "duration": e.duration, "syllabus": e.syllabus,
+            "total_marks": e.total_marks
+        })
+    return {"exams": result}
+
+
+@app.post("/exam-schedule")
+def create_exam(
+    data: ExamScheduleCreate,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    exam = ExamScheduleDB(
+        course_id=data.course_id, title=data.title, subject=data.subject,
+        exam_date=data.exam_date, exam_time=data.exam_time,
+        duration=data.duration, syllabus=data.syllabus, total_marks=data.total_marks
+    )
+    db.add(exam)
+    db.commit()
+    db.refresh(exam)
+    try:
+        log_audit(db, user["username"], "CREATE", "ExamSchedule", exam.id,
+                  f"{data.title} - {data.subject} on {data.exam_date}")
+    except Exception as e:
+        print(f"Audit log error: {e}")
+    return {"message": "Exam scheduled", "id": exam.id}
+
+
+@app.put("/exam-schedule/{exam_id}")
+def update_exam(
+    exam_id: int,
+    data: ExamScheduleCreate,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    exam = db.query(ExamScheduleDB).filter(ExamScheduleDB.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    for field, value in data.dict().items():
+        setattr(exam, field, value)
+    db.commit()
+    try:
+        log_audit(db, user["username"], "UPDATE", "ExamSchedule", exam_id, f"{data.title}")
+    except Exception as e:
+        print(f"Audit log error: {e}")
+    return {"message": "Exam updated"}
+
+
+@app.delete("/exam-schedule/{exam_id}")
+def delete_exam(
+    exam_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    exam = db.query(ExamScheduleDB).filter(ExamScheduleDB.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    try:
+        log_audit(db, user["username"], "DELETE", "ExamSchedule", exam_id, f"{exam.title}")
+    except Exception as e:
+        print(f"Audit log error: {e}")
+    db.delete(exam)
+    db.commit()
+    return {"message": "Exam deleted"}
+
+
+# ----------------------------------------------------------------------------------------------------
+# AUDIT LOGS
+
+@app.get("/audit-logs")
+def get_audit_logs(
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    logs = db.query(AuditLogDB).order_by(AuditLogDB.id.desc()).limit(limit).all()
+    return {"logs": [
+        {
+            "id": l.id, "performed_by": l.performed_by, "action": l.action,
+            "entity": l.entity, "entity_id": l.entity_id,
+            "details": l.details, "timestamp": l.timestamp
+        }
+        for l in logs
+    ]}
