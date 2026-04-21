@@ -550,12 +550,22 @@ def dashboard_summary(
     total_fees = sum(f.amount or 0 for f in fees)
     total_paid = sum(f.paid or 0 for f in fees)
 
-    # Course-wise student count
-    courses = db.query(CourseDB).all()
-    course_stats = []
-    for c in courses:
-        count = db.query(StudentDB).filter(StudentDB.course == c.name).count()
-        course_stats.append({"name": c.name, "students": count})
+    # Course-wise student count — group directly from students table
+    # so ALL students are counted regardless of CourseDB entries
+    from sqlalchemy import func as sqlfunc
+    course_rows = (
+        db.query(StudentDB.course, sqlfunc.count(StudentDB.id).label("cnt"))
+        .filter(StudentDB.course != None, StudentDB.course != "")
+        .group_by(StudentDB.course)
+        .all()
+    )
+    course_stats = [{"name": row.course, "students": row.cnt} for row in course_rows]
+    # Students with no course assigned
+    no_course_count = db.query(StudentDB).filter(
+        (StudentDB.course == None) | (StudentDB.course == "")
+    ).count()
+    if no_course_count > 0:
+        course_stats.append({"name": "No Course", "students": no_course_count})
 
     # Overdue fees count
     today = date.today()
