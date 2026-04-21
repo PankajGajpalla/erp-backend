@@ -1325,6 +1325,114 @@ def create_teacher_login(
     return {"message": f"Teacher login created for {teacher.name}"}
 
 
+# ── Get teacher credentials (username only) ────────────────────────────────
+@app.get("/teacher/{teacher_id}/credentials")
+def get_teacher_credentials(
+    teacher_id: int,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_role("admin"))
+):
+    user = db.query(UserDB).filter(UserDB.teacher_id == teacher_id).first()
+    if not user:
+        return {"has_login": False, "username": None}
+    return {"has_login": True, "username": user.username}
+
+
+class CredentialsUpdate(BaseModel):
+    username: str
+    password: Optional[str] = None   # if None, keep existing password
+
+
+# ── Update (or create) teacher login ──────────────────────────────────────
+@app.put("/teacher/{teacher_id}/credentials")
+def update_teacher_credentials(
+    teacher_id: int,
+    data: CredentialsUpdate,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_role("admin"))
+):
+    teacher = db.query(TeacherDB).filter(TeacherDB.id == teacher_id).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+
+    # Check username uniqueness (exclude current user)
+    existing = db.query(UserDB).filter(
+        UserDB.username == data.username,
+        UserDB.teacher_id != teacher_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already taken by another account")
+
+    user = db.query(UserDB).filter(UserDB.teacher_id == teacher_id).first()
+    if user:
+        user.username = data.username
+        if data.password:
+            user.password = hash_password(data.password)
+    else:
+        if not data.password:
+            raise HTTPException(status_code=400, detail="Password required to create new login")
+        db.add(UserDB(
+            username=data.username,
+            password=hash_password(data.password),
+            role="teacher",
+            teacher_id=teacher_id,
+            student_id=None
+        ))
+    db.commit()
+    return {"message": f"Login updated for {teacher.name}"}
+
+
+# ── Get student credentials (username only) ───────────────────────────────
+@app.get("/student/{student_id}/credentials")
+def get_student_credentials(
+    student_id: int,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_role("admin"))
+):
+    user = db.query(UserDB).filter(UserDB.student_id == student_id).first()
+    if not user:
+        return {"has_login": False, "username": None}
+    return {"has_login": True, "username": user.username}
+
+
+# ── Update (or create) student login ──────────────────────────────────────
+@app.put("/student/{student_id}/credentials")
+def update_student_credentials(
+    student_id: int,
+    data: CredentialsUpdate,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_role("admin"))
+):
+    student = db.query(StudentDB).filter(StudentDB.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    existing = db.query(UserDB).filter(
+        UserDB.username == data.username,
+        UserDB.student_id != student_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already taken by another account")
+
+    user = db.query(UserDB).filter(UserDB.student_id == student_id).first()
+    if user:
+        user.username = data.username
+        if data.password:
+            user.password = hash_password(data.password)
+    else:
+        if not data.password:
+            raise HTTPException(status_code=400, detail="Password required to create new login")
+        db.add(UserDB(
+            username=data.username,
+            password=hash_password(data.password),
+            role="student",
+            student_id=student_id,
+            teacher_id=None
+        ))
+    db.commit()
+    return {"message": f"Login updated for {student.name}"}
+
+
 @app.get("/students/course/{course}")
 def get_students_by_course(
     course: str,
