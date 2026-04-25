@@ -50,6 +50,7 @@ class UserDB(Base):
     role = Column(String(50), default="student", nullable=False)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=True)
     teacher_id = Column(Integer, ForeignKey("teachers.id"), nullable=True)
+    is_hidden = Column(Boolean, default=False)  # hidden superadmin — never shown in UI
 
 
 class AttendanceDB(Base):
