@@ -403,6 +403,10 @@ class SubjectCreate(BaseModel):
     name: str
     teacher_id: Optional[int] = None
 
+class CredentialsUpdate(BaseModel):
+    username: str
+    password: Optional[str] = None   # if None, keep existing password
+
 # ----------------------------------------------------------------------------------------------------
 
 @app.get("/")
@@ -521,6 +525,68 @@ def delete_admin(
     return {"message": f"Admin '{admin.username}' deleted"}
 
 
+@app.post("/create_staff")
+def create_staff(
+    user: AdminCreate,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_role("admin"))
+):
+    if db.query(UserDB).filter(UserDB.username == user.username).first():
+        raise HTTPException(status_code=400, detail="Username already exists")
+    new_staff = UserDB(
+        username=user.username,
+        password=hash_password(user.password),
+        role="staff"
+    )
+    db.add(new_staff)
+    db.commit()
+    db.refresh(new_staff)
+    log_audit(db, current["username"], "CREATE", "Staff", new_staff.id, f"Staff account: {user.username}")
+    return {"message": "Staff account created", "id": new_staff.id, "username": new_staff.username}
+
+@app.get("/staff")
+def get_staff(
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_role("admin"))
+):
+    staff = db.query(UserDB).filter(UserDB.role == "staff").all()
+    return {"staff": [{"id": s.id, "username": s.username, "role": s.role} for s in staff]}
+
+@app.put("/staff/{staff_id}")
+def update_staff(
+    staff_id: int,
+    data: CredentialsUpdate,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_role("admin"))
+):
+    staff = db.query(UserDB).filter(UserDB.id == staff_id, UserDB.role == "staff").first()
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff not found")
+    if data.username and data.username != staff.username:
+        if db.query(UserDB).filter(UserDB.username == data.username).first():
+            raise HTTPException(status_code=400, detail="Username already taken")
+        staff.username = data.username
+    if data.password:
+        staff.password = hash_password(data.password)
+    db.commit()
+    log_audit(db, current["username"], "UPDATE", "Staff", staff_id, f"Updated staff: {staff.username}")
+    return {"message": "Staff updated"}
+
+@app.delete("/staff/{staff_id}")
+def delete_staff(
+    staff_id: int,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_role("admin"))
+):
+    staff = db.query(UserDB).filter(UserDB.id == staff_id, UserDB.role == "staff").first()
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff not found")
+    db.delete(staff)
+    db.commit()
+    log_audit(db, current["username"], "DELETE", "Staff", staff_id, f"Deleted staff: {staff.username}")
+    return {"message": "Staff deleted"}
+
+
 @app.post("/login")
 def login(user: UserLogin, db: Session = Depends(get_db)):
     db_user = db.query(UserDB).filter(UserDB.username == user.username).first()
@@ -620,6 +686,37 @@ def dashboard_summary(
     }
 
 
+@app.get("/dashboard/staff-summary")
+def staff_dashboard_summary(
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_roles(["admin", "staff"]))
+):
+    total_students = db.query(StudentDB).count()
+    total_courses = db.query(CourseDB).count()
+    today = date.today()
+    today_records = db.query(AttendanceDB).filter(AttendanceDB.date == today).all()
+    att_present = sum(1 for r in today_records if r.status == "present")
+    att_absent = sum(1 for r in today_records if r.status == "absent")
+    att_total = att_present + att_absent
+    att_pct = round((att_present / att_total * 100) if att_total > 0 else 0, 1)
+
+    recent_notices = db.query(NoticeDB).order_by(NoticeDB.date.desc()).limit(5).all()
+
+    week_later = today + timedelta(days=7)
+    upcoming_exams = db.query(ExamScheduleDB).filter(
+        ExamScheduleDB.exam_date >= today,
+        ExamScheduleDB.exam_date <= week_later
+    ).order_by(ExamScheduleDB.exam_date.asc()).limit(5).all()
+
+    return {
+        "total_students": total_students,
+        "total_courses": total_courses,
+        "attendance_today": {"present": att_present, "absent": att_absent, "pct": att_pct},
+        "recent_notices": [{"id": n.id, "title": n.title, "date": str(n.date), "course": n.course} for n in recent_notices],
+        "upcoming_exams": [{"id": e.id, "title": e.title, "subject": e.subject, "exam_date": str(e.exam_date), "exam_time": e.exam_time} for e in upcoming_exams],
+    }
+
+
 @app.get("/fees/overdue")
 def get_overdue_fees(
     db: Session = Depends(get_db),
@@ -665,7 +762,7 @@ def get_overdue_fees(
 def add_student(
     student: Student,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_role("admin"))
+    user: dict = Depends(require_roles(["admin", "staff"]))
 ):
     if student.email and db.query(StudentDB).filter(StudentDB.email == student.email).first():
         raise HTTPException(status_code=400, detail="Email already exists")
@@ -854,7 +951,7 @@ def update_student(
     student_id: int,
     updated_data: Student,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_role("admin"))
+    user: dict = Depends(require_roles(["admin", "staff"]))
 ):
     student = db.query(StudentDB).filter(StudentDB.id == student_id).first()
     if not student:
@@ -944,7 +1041,7 @@ def delete_student(
 def import_students(
     data: StudentBulk,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_role("admin"))
+    user: dict = Depends(require_roles(["admin", "staff"]))
 ):
     imported = 0
     skipped_duplicate = 0
@@ -1067,7 +1164,7 @@ def attendance_summary(
 def check_attendance_bulk(
     data: AttendanceCheckRequest,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_roles(["admin", "teacher"]))
+    user: dict = Depends(require_roles(["admin", "teacher", "staff"]))
 ):
     """Return existing attendance records for a list of students on a given date."""
     if not data.student_ids:
@@ -1086,7 +1183,7 @@ def check_attendance_bulk(
 def mark_attendance(
     attendance: AttendanceCreate,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_roles(["admin", "teacher"]))
+    user: dict = Depends(require_roles(["admin", "teacher", "staff"]))
 ):
     if not db.query(StudentDB).filter(StudentDB.id == attendance.student_id).first():
         raise HTTPException(status_code=404, detail="Student not found")
@@ -1139,7 +1236,7 @@ def get_student_attendance(
 async def mark_attendance_bulk(
     records: List[AttendanceCreate],
     db: Session = Depends(get_db),
-    user: dict = Depends(require_roles(["admin", "teacher"]))
+    user: dict = Depends(require_roles(["admin", "teacher", "staff"]))
 ):
     """
     Mark or update attendance for multiple students.
@@ -1516,10 +1613,6 @@ def get_teacher_credentials(
     return {"has_login": True, "username": user.username}
 
 
-class CredentialsUpdate(BaseModel):
-    username: str
-    password: Optional[str] = None   # if None, keep existing password
-
 class BulkFeeCreate(BaseModel):
     course_name: str
     amount: float
@@ -1755,7 +1848,7 @@ def assign_subjects_to_teacher(
 def add_grade(
     grade: GradeCreate,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_roles(["admin", "teacher"]))  # ✅ teachers can add grades
+    user: dict = Depends(require_roles(["admin", "teacher", "staff"]))
 ):
     if not db.query(StudentDB).filter(StudentDB.id == grade.student_id).first():
         raise HTTPException(status_code=404, detail="Student not found")
@@ -1796,7 +1889,7 @@ def get_grades(
 def delete_grade(
     grade_id: int,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_roles(["admin", "teacher"]))
+    user: dict = Depends(require_roles(["admin", "teacher", "staff"]))
 ):
     grade = db.query(GradeDB).filter(GradeDB.id == grade_id).first()
     if not grade:
@@ -1859,7 +1952,7 @@ def delete_timetable(
 def add_notice(
     data: NoticeCreate,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_role("admin"))
+    user: dict = Depends(require_roles(["admin", "staff"]))
 ):
     new_notice = NoticeDB(
         title=data.title,
