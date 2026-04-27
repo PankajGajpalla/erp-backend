@@ -1945,6 +1945,42 @@ def add_timetable(
     return {"message": "Timetable entry added", "data": new_entry}
 
 
+@app.get("/timetable/teacher/me")
+def get_my_timetable(
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("teacher"))
+):
+    """Returns all timetable entries for the logged-in teacher, with course name included."""
+    teacher_id = user.get("teacher_id")
+    if not teacher_id:
+        raise HTTPException(status_code=404, detail="Teacher profile not found")
+    teacher = db.query(TeacherDB).filter(TeacherDB.id == teacher_id).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+
+    # Get all timetable entries where teacher name matches (case-insensitive)
+    entries = db.query(TimetableDB).filter(
+        TimetableDB.teacher.ilike(teacher.name)
+    ).all()
+
+    # Build course name lookup
+    course_ids = list({e.course_id for e in entries if e.course_id})
+    courses = {c.id: c.name for c in db.query(CourseDB).filter(CourseDB.id.in_(course_ids)).all()}
+
+    result = []
+    for e in entries:
+        result.append({
+            "id": e.id,
+            "day": e.day,
+            "subject": e.subject,
+            "teacher": e.teacher,
+            "time_slot": e.time_slot,
+            "course_id": e.course_id,
+            "course_name": courses.get(e.course_id, "—"),
+        })
+    return {"timetable": result, "teacher_name": teacher.name}
+
+
 @app.get("/timetable/course/{course_id}")
 def get_timetable_by_course(
     course_id: int,
