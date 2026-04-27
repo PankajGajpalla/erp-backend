@@ -229,6 +229,8 @@ def hash_password(password: str):
 def verify_password(plain, hashed):
     return pwd_context.verify(plain, hashed)
 
+IST = timezone(timedelta(hours=5, minutes=30))  # Indian Standard Time
+
 def log_audit(db: Session, performed_by: str, action: str, entity: str, entity_id: int = None, details: str = None):
     """Log an admin action to the audit trail."""
     try:
@@ -238,7 +240,7 @@ def log_audit(db: Session, performed_by: str, action: str, entity: str, entity_i
             entity=entity,
             entity_id=entity_id,
             details=details,
-            timestamp=datetime.now().isoformat()
+            timestamp=datetime.now(IST).isoformat()  # stored with +05:30 so browser shows correct IST
         ))
         db.commit()
     except Exception as e:
@@ -2054,8 +2056,7 @@ def mark_notice_read(notice_id: int, db: Session = Depends(get_db), user: dict =
     # Upsert — ignore if already exists
     existing = db.query(NoticeReadDB).filter(NoticeReadDB.notice_id == notice_id, NoticeReadDB.user_id == db_user.id).first()
     if not existing:
-        from datetime import datetime
-        db.add(NoticeReadDB(notice_id=notice_id, user_id=db_user.id, read_at=datetime.utcnow().isoformat()))
+        db.add(NoticeReadDB(notice_id=notice_id, user_id=db_user.id, read_at=datetime.now(IST).isoformat()))
         db.commit()
     return {"message": "Marked as read"}
 
