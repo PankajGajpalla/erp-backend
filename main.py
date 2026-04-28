@@ -713,6 +713,121 @@ def dashboard_summary(
     }
 
 
+@app.get("/dashboard/charts")
+def dashboard_charts(
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_roles(["admin", "staff"]))
+):
+    from collections import defaultdict
+
+    today = date.today()
+
+    # ── Helper: year/month N months ago ──────────────────────────
+    def month_ago(n):
+        month = today.month - n
+        year  = today.year
+        while month <= 0:
+            month += 12
+            year  -= 1
+        return year, month
+
+    # ── Monthly fee payments — last 6 months ─────────────────────
+    monthly_fees = []
+    for i in range(5, -1, -1):
+        yr, mo = month_ago(i)
+        collected = db.query(func.coalesce(func.sum(FeePaymentDB.amount), 0)).filter(
+            func.extract("year",  FeePaymentDB.paid_date) == yr,
+            func.extract("month", FeePaymentDB.paid_date) == mo,
+        ).scalar() or 0
+        label = date(yr, mo, 1).strftime("%b %Y")
+        monthly_fees.append({"month": label, "collected": round(float(collected), 2)})
+
+    # ── Monthly student enrollment — last 12 months ───────────────
+    monthly_enrollment = []
+    for i in range(11, -1, -1):
+        yr, mo = month_ago(i)
+        count = db.query(func.count(StudentDB.id)).filter(
+            func.extract("year",  StudentDB.admission_date) == yr,
+            func.extract("month", StudentDB.admission_date) == mo,
+        ).scalar() or 0
+        label = date(yr, mo, 1).strftime("%b %y")
+        monthly_enrollment.append({"month": label, "students": int(count)})
+
+    # ── Course-wise attendance % — last 30 days ───────────────────
+    thirty_ago = today - timedelta(days=30)
+    students = db.query(StudentDB).filter(
+        StudentDB.course != None, StudentDB.course != ""
+    ).all()
+    student_course = {s.id: s.course for s in students}
+
+    att_records = db.query(AttendanceDB).filter(
+        AttendanceDB.date >= thirty_ago,
+        AttendanceDB.date <= today,
+    ).all()
+
+    course_present = defaultdict(int)
+    course_total   = defaultdict(int)
+    for r in att_records:
+        course = student_course.get(r.student_id)
+        if not course:
+            continue
+        course_total[course]   += 1
+        if r.status == "present":
+            course_present[course] += 1
+
+    course_attendance = []
+    for course, total in course_total.items():
+        pct = round(course_present[course] / total * 100, 1) if total > 0 else 0
+        course_attendance.append({
+            "course":      course,
+            "attendance":  pct,
+            "total":       total,
+        })
+    course_attendance.sort(key=lambda x: x["course"])
+
+    return {
+        "monthly_fees":       monthly_fees,
+        "monthly_enrollment": monthly_enrollment,
+        "course_attendance":  course_attendance,
+    }
+
+
+@app.get("/attendance/report")
+def attendance_report(
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_roles(["admin", "staff"]))
+):
+    from collections import defaultdict
+
+    students = db.query(StudentDB).order_by(StudentDB.name).all()
+    att_all  = db.query(AttendanceDB).all()
+
+    by_student = defaultdict(lambda: {"present": 0, "absent": 0})
+    for r in att_all:
+        if r.status in ("present", "absent"):
+            by_student[r.student_id][r.status] += 1
+
+    report = []
+    for s in students:
+        att     = by_student.get(s.id, {"present": 0, "absent": 0})
+        present = att["present"]
+        absent  = att["absent"]
+        total   = present + absent
+        pct     = round(present / total * 100, 1) if total > 0 else None
+        report.append({
+            "id":           s.id,
+            "name":         s.name,
+            "student_code": s.student_code,
+            "course":       s.course or "",
+            "present":      present,
+            "absent":       absent,
+            "total":        total,
+            "percentage":   pct,
+        })
+
+    return {"report": report}
+
+
 @app.get("/dashboard/staff-summary")
 def staff_dashboard_summary(
     db: Session = Depends(get_db),
