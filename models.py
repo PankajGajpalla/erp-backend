@@ -177,6 +177,19 @@ class AuditLogDB(Base):
     timestamp = Column(String(50), nullable=False)       # ISO string
 
 
+class GrievanceDB(Base):
+    __tablename__ = "grievances"
+    id          = Column(Integer, primary_key=True, index=True)
+    student_id  = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    title       = Column(String(200), nullable=False)
+    description = Column(Text, nullable=False)
+    status      = Column(String(20), default="open")   # open | resolved
+    reply       = Column(Text, nullable=True)
+    replied_by  = Column(String(100), nullable=True)   # username of admin/staff
+    replied_at  = Column(String(50), nullable=True)
+    created_at  = Column(String(50), nullable=False)
+
+
 class NoticeReadDB(Base):
     __tablename__ = "notice_reads"
     __table_args__ = (

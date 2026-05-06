@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from database import SessionLocal, engine, Base
-from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB, StudentAdditionalCourseDB, FeeTemplateDB, ExamScheduleDB, AuditLogDB, NoticeReadDB
+from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB, StudentAdditionalCourseDB, FeeTemplateDB, ExamScheduleDB, AuditLogDB, NoticeReadDB, GrievanceDB
 from pydantic import BaseModel
 from fastapi import HTTPException
 from passlib.context import CryptContext
@@ -199,6 +199,17 @@ def run_migrations():
             user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
             read_at VARCHAR(50) NOT NULL,
             CONSTRAINT uq_notice_read UNIQUE (notice_id, user_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS grievances (
+            id SERIAL PRIMARY KEY,
+            student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
+            title VARCHAR(200) NOT NULL,
+            description TEXT NOT NULL,
+            status VARCHAR(20) DEFAULT 'open',
+            reply TEXT,
+            replied_by VARCHAR(100),
+            replied_at VARCHAR(50),
+            created_at VARCHAR(50) NOT NULL
         )""",
     ]
     for sql in statements:
@@ -2664,6 +2675,133 @@ def get_audit_logs(
         for l in logs
         if l.performed_by not in hidden_usernames
     ]}
+
+
+# ----------------------------------------------------------------------------------------------------
+# GRIEVANCES
+
+class GrievanceCreate(BaseModel):
+    title: str
+    description: str
+
+class GrievanceReply(BaseModel):
+    reply: str
+    resolve: bool = False   # if True, also marks as resolved
+
+def _grievance_dict(g: GrievanceDB, student_name: str = None):
+    return {
+        "id":          g.id,
+        "student_id":  g.student_id,
+        "student_name": student_name,
+        "title":       g.title,
+        "description": g.description,
+        "status":      g.status,
+        "reply":       g.reply,
+        "replied_by":  g.replied_by,
+        "replied_at":  g.replied_at,
+        "created_at":  g.created_at,
+    }
+
+# Student: submit a grievance
+@app.post("/grievances")
+def submit_grievance(
+    data: GrievanceCreate,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("student"))
+):
+    student = db.query(StudentDB).filter(StudentDB.id == user["student_id"]).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    g = GrievanceDB(
+        student_id  = user["student_id"],
+        title       = data.title.strip(),
+        description = data.description.strip(),
+        status      = "open",
+        created_at  = datetime.now(IST).isoformat(),
+    )
+    db.add(g)
+    db.commit()
+    db.refresh(g)
+    return _grievance_dict(g, student.name)
+
+# Student: view their own grievances
+@app.get("/grievances/my")
+def my_grievances(
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("student"))
+):
+    grievances = (
+        db.query(GrievanceDB)
+        .filter(GrievanceDB.student_id == user["student_id"])
+        .order_by(GrievanceDB.id.desc())
+        .all()
+    )
+    return {"grievances": [_grievance_dict(g) for g in grievances]}
+
+# Admin / Staff: view all grievances
+@app.get("/grievances")
+def get_all_grievances(
+    status: str = None,   # optional filter: open | resolved
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_roles(["admin", "staff"]))
+):
+    q = db.query(GrievanceDB)
+    if status:
+        q = q.filter(GrievanceDB.status == status)
+    grievances = q.order_by(GrievanceDB.id.desc()).all()
+    # attach student names
+    student_ids = {g.student_id for g in grievances}
+    students = {s.id: s.name for s in db.query(StudentDB).filter(StudentDB.id.in_(student_ids)).all()}
+    return {"grievances": [_grievance_dict(g, students.get(g.student_id)) for g in grievances]}
+
+# Admin / Staff: reply and/or resolve a grievance
+@app.put("/grievances/{grievance_id}/reply")
+def reply_grievance(
+    grievance_id: int,
+    data: GrievanceReply,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_roles(["admin", "staff"]))
+):
+    g = db.query(GrievanceDB).filter(GrievanceDB.id == grievance_id).first()
+    if not g:
+        raise HTTPException(status_code=404, detail="Grievance not found")
+    g.reply      = data.reply.strip()
+    g.replied_by = user["username"]
+    g.replied_at = datetime.now(IST).isoformat()
+    if data.resolve:
+        g.status = "resolved"
+    db.commit()
+    db.refresh(g)
+    student = db.query(StudentDB).filter(StudentDB.id == g.student_id).first()
+    return _grievance_dict(g, student.name if student else None)
+
+# Admin / Staff: mark as resolved without replying
+@app.patch("/grievances/{grievance_id}/resolve")
+def resolve_grievance(
+    grievance_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_roles(["admin", "staff"]))
+):
+    g = db.query(GrievanceDB).filter(GrievanceDB.id == grievance_id).first()
+    if not g:
+        raise HTTPException(status_code=404, detail="Grievance not found")
+    g.status = "resolved"
+    db.commit()
+    return {"message": "Marked as resolved"}
+
+# Admin / Staff: reopen a grievance
+@app.patch("/grievances/{grievance_id}/reopen")
+def reopen_grievance(
+    grievance_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_roles(["admin", "staff"]))
+):
+    g = db.query(GrievanceDB).filter(GrievanceDB.id == grievance_id).first()
+    if not g:
+        raise HTTPException(status_code=404, detail="Grievance not found")
+    g.status = "open"
+    db.commit()
+    return {"message": "Reopened"}
 
 
 # ----------------------------------------------------------------------------------------------------
