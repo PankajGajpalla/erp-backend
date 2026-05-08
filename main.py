@@ -1167,7 +1167,7 @@ def bulk_update_course(
 def delete_student(
     student_id: int,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_role("admin"))
+    user: dict = Depends(require_roles(["admin", "staff"]))
 ):
     student = db.query(StudentDB).filter(StudentDB.id == student_id).first()
     if not student:
