@@ -2245,7 +2245,7 @@ def get_notice_reads(notice_id: int, db: Session = Depends(get_db), user: dict =
 def add_course(
     course: CourseCreate,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_role("admin"))
+    user: dict = Depends(require_roles(["admin", "staff"]))
 ):
     if db.query(CourseDB).filter(CourseDB.name == course.name).first():
         raise HTTPException(status_code=400, detail="Course already exists")
@@ -2271,7 +2271,7 @@ def update_course(
     course_id: int,
     updated: CourseCreate,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_role("admin"))
+    user: dict = Depends(require_roles(["admin", "staff"]))
 ):
     course = db.query(CourseDB).filter(CourseDB.id == course_id).first()
     if not course:
@@ -2292,7 +2292,7 @@ def update_course(
 def delete_course(
     course_id: int,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_role("admin"))
+    user: dict = Depends(require_roles(["admin", "staff"]))
 ):
     course = db.query(CourseDB).filter(CourseDB.id == course_id).first()
     if not course:
