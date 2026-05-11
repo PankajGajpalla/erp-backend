@@ -2279,10 +2279,14 @@ def update_course(
     existing = db.query(CourseDB).filter(CourseDB.name == updated.name, CourseDB.id != course_id).first()
     if existing:
         raise HTTPException(status_code=400, detail="Another course with this name already exists")
+    old_name = course.name
     course.name = updated.name
     course.description = updated.description
     course.duration = updated.duration
     course.fees = updated.fees
+    # Cascade name change to all students enrolled in this course
+    if old_name != updated.name:
+        db.query(StudentDB).filter(StudentDB.course == old_name).update({"course": updated.name})
     db.commit()
     db.refresh(course)
     return {"message": "Course updated", "data": course}
