@@ -32,24 +32,27 @@ import httpx
 #
 # API format used: message=<fast2sms_template_id> + variables_values=V1|V2|V3
 # ─────────────────────────────────────────────────────────────────────────────
-FAST2SMS_API_KEY = os.getenv("FAST2SMS_API_KEY", "")
-DLT_SENDER_ID    = os.getenv("DLT_SENDER_ID",  "ABSFND")
-DLT_TEMPLATE_ID  = os.getenv("DLT_TEMPLATE_ID", "213770")
+FAST2SMS_API_KEY       = os.getenv("FAST2SMS_API_KEY", "")
+DLT_SENDER_ID          = os.getenv("DLT_SENDER_ID",  "ABSFND")
+DLT_TEMPLATE_ID        = os.getenv("DLT_TEMPLATE_ID", "213770")
+DLT_MARKS_TEMPLATE_ID  = os.getenv("DLT_MARKS_TEMPLATE_ID", "")
 
 
-async def send_sms(phone: str, variables_values: str) -> bool:
+async def send_sms(phone: str, variables_values: str, template_id: str = None) -> bool:
     """Send a DLT-compliant transactional SMS via Fast2SMS.
 
     variables_values: pipe-separated variable substitutions matching the approved
     template order, e.g. "Rahul Kumar|PRESENT|2025-04-17"
+    template_id: override DLT_TEMPLATE_ID for a different registered template
 
     Returns True if Fast2SMS accepted the request, False otherwise.
     All failures are logged but never raise — SMS is non-critical.
     """
+    tid = template_id or DLT_TEMPLATE_ID
     if not FAST2SMS_API_KEY:
         print("❌ SMS: FAST2SMS_API_KEY not set — skipping")
         return False
-    if not DLT_TEMPLATE_ID:
+    if not tid:
         print("❌ SMS: DLT_TEMPLATE_ID not set — skipping (set it in Render env vars)")
         return False
     if not phone:
@@ -82,7 +85,7 @@ async def send_sms(phone: str, variables_values: str) -> bool:
                 json={
                     "route":            "dlt",
                     "sender_id":        DLT_SENDER_ID,
-                    "message":          DLT_TEMPLATE_ID,
+                    "message":          tid,
                     "variables_values": variables_values,
                     "numbers":          clean_phone,
                     "flash":            "0",
@@ -2002,12 +2005,13 @@ def assign_subjects_to_teacher(
 # GRADES
 
 @app.post("/add_grade")
-def add_grade(
+async def add_grade(
     grade: GradeCreate,
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(["admin", "teacher", "staff"]))
 ):
-    if not db.query(StudentDB).filter(StudentDB.id == grade.student_id).first():
+    student = db.query(StudentDB).filter(StudentDB.id == grade.student_id).first()
+    if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
     percentage = (grade.marks / grade.total_marks) * 100
@@ -2024,6 +2028,15 @@ def add_grade(
     db.add(new_grade)
     db.commit()
     db.refresh(new_grade)
+
+    # Send SMS to parent if marks template is configured
+    # Template: "Dear Parent, Your ward scored {#numeric#}/{#numeric#} in {#alphanumeric#} test on {#alphanumeric#}. Reply YES after receiving. -ABS Foundation"
+    # Variables: marks | total_marks | subject | date
+    if student.parent_phone and DLT_MARKS_TEMPLATE_ID:
+        today = datetime.now(IST).strftime("%d-%m-%Y")
+        variables_values = f"{int(grade.marks)}|{int(grade.total_marks)}|{grade.subject}|{today}"
+        await send_sms(student.parent_phone, variables_values, template_id=DLT_MARKS_TEMPLATE_ID)
+
     return {"message": "Grade added", "data": new_grade}
 
 
