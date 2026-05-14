@@ -399,6 +399,7 @@ class GradeCreate(BaseModel):
     marks: float
     total_marks: float
     test_title: Optional[str] = None
+    test_date: Optional[str] = None   # DD-MM-YYYY, used in SMS to parent
 
 class TimetableCreate(BaseModel):
     course_id: int
@@ -2033,8 +2034,8 @@ async def add_grade(
     # Template: "Dear Parent, Your ward scored {#numeric#}/{#numeric#} in {#alphanumeric#} test on {#alphanumeric#}. Reply YES after receiving. -ABS Foundation"
     # Variables: marks | total_marks | subject | date
     if student.parent_phone and DLT_MARKS_TEMPLATE_ID:
-        today = datetime.now(IST).strftime("%d-%m-%Y")
-        variables_values = f"{int(grade.marks)}|{int(grade.total_marks)}|{grade.subject}|{today}"
+        sms_date = grade.test_date or datetime.now(IST).strftime("%d-%m-%Y")
+        variables_values = f"{int(grade.marks)}|{int(grade.total_marks)}|{grade.subject}|{sms_date}"
         await send_sms(student.parent_phone, variables_values, template_id=DLT_MARKS_TEMPLATE_ID)
 
     return {"message": "Grade added", "data": new_grade}
