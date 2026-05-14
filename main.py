@@ -2319,7 +2319,7 @@ def delete_course(
     db.query(TimetableDB).filter(TimetableDB.course_id == course_id).delete()
     db.query(FeeTemplateDB).filter(FeeTemplateDB.course_id == course_id).delete()
     db.query(ExamScheduleDB).filter(ExamScheduleDB.course_id == course_id).delete()
-    db.query(NoticeDB).filter(NoticeDB.course_id == course_id).update({"course_id": None})
+    db.query(NoticeDB).filter(NoticeDB.course == course.name).update({"course": None})
     db.query(StudentAdditionalCourseDB).filter(StudentAdditionalCourseDB.course_id == course_id).delete()
     db.delete(course)
     db.commit()
