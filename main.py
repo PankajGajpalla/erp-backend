@@ -1887,7 +1887,7 @@ def update_student_credentials(
 def get_students_by_course(
     course: str,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_roles(["admin", "teacher"]))
+    user: dict = Depends(require_roles(["admin", "teacher", "staff"]))
 ):
     # Primary students
     primary = db.query(StudentDB).filter(StudentDB.course == course).all()
