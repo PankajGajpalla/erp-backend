@@ -2314,6 +2314,13 @@ def delete_course(
     course = db.query(CourseDB).filter(CourseDB.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+    # Remove foreign-key dependents before deleting the course
+    db.query(SubjectDB).filter(SubjectDB.course_id == course_id).delete()
+    db.query(TimetableDB).filter(TimetableDB.course_id == course_id).delete()
+    db.query(FeeTemplateDB).filter(FeeTemplateDB.course_id == course_id).delete()
+    db.query(ExamScheduleDB).filter(ExamScheduleDB.course_id == course_id).delete()
+    db.query(NoticeDB).filter(NoticeDB.course_id == course_id).update({"course_id": None})
+    db.query(StudentAdditionalCourseDB).filter(StudentAdditionalCourseDB.course_id == course_id).delete()
     db.delete(course)
     db.commit()
     return {"message": "Course deleted"}
