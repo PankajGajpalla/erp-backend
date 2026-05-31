@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "PowerShell(Copy-Item \"C:\\\\Users\\\\hp.1\\\\Desktop\\\\claud erp\\\\btechproject\\\\.env.example\" \"C:\\\\Users\\\\hp.1\\\\Desktop\\\\claud erp\\\\btechproject\\\\.env.local\")",
+      "Bash(node -e \"const l = require\\('C:/Users/hp.1/Desktop/school-erp/frontend/node_modules/lucide-react'\\); console.log\\('CalendarOff' in l, 'CalendarX2' in l, 'CalendarX' in l\\)\")",
+      "Bash(node --input-type=module)",
+      "Bash(npx --yes vite build --mode development)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
+    ]
+  }
+}

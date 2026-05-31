@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from database import SessionLocal, engine, Base
-from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB, StudentAdditionalCourseDB, FeeTemplateDB, ExamScheduleDB, AuditLogDB, NoticeReadDB, GrievanceDB
+from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB, StudentAdditionalCourseDB, FeeTemplateDB, ExamScheduleDB, AuditLogDB, NoticeReadDB, GrievanceDB, InquiryDB, InquiryFollowUpDB
 from pydantic import BaseModel
 from fastapi import HTTPException
 from passlib.context import CryptContext
@@ -213,6 +213,33 @@ def run_migrations():
             replied_by VARCHAR(100),
             replied_at VARCHAR(50),
             created_at VARCHAR(50) NOT NULL
+        )""",
+        """CREATE TABLE IF NOT EXISTS inquiries (
+            id SERIAL PRIMARY KEY,
+            date DATE NOT NULL,
+            student_name VARCHAR(200) NOT NULL,
+            course_interested VARCHAR(200),
+            student_phone VARCHAR(50),
+            parent_phone VARCHAR(50),
+            mode VARCHAR(20) NOT NULL,
+            attended_by VARCHAR(200),
+            negotiated_amount FLOAT,
+            referral_source VARCHAR(200),
+            remarks VARCHAR(50),
+            custom_remark TEXT,
+            status VARCHAR(20) DEFAULT 'inquiry',
+            admission_date DATE,
+            created_at VARCHAR(50)
+        )""",
+        """CREATE TABLE IF NOT EXISTS inquiry_followups (
+            id SERIAL PRIMARY KEY,
+            inquiry_id INTEGER REFERENCES inquiries(id) ON DELETE CASCADE,
+            date DATE NOT NULL,
+            notes TEXT,
+            outcome VARCHAR(50),
+            next_followup_date DATE,
+            created_by VARCHAR(200),
+            created_at VARCHAR(50)
         )""",
     ]
     for sql in statements:
@@ -2827,6 +2854,273 @@ def reopen_grievance(
     g.status = "open"
     db.commit()
     return {"message": "Reopened"}
+
+
+# ----------------------------------------------------------------------------------------------------
+# INQUIRY MANAGEMENT
+
+class InquiryCreate(BaseModel):
+    date: date
+    student_name: str
+    course_interested: Optional[str] = None
+    student_phone: Optional[str] = None
+    parent_phone: Optional[str] = None
+    mode: str                                    # 'phone' | 'walk_in'
+    attended_by: Optional[str] = None
+    negotiated_amount: Optional[float] = None
+    referral_source: Optional[str] = None
+    remarks: Optional[str] = None               # 'interested' | 'not_interested' | 'demo_requested' | 'other'
+    custom_remark: Optional[str] = None
+    status: Optional[str] = "inquiry"
+
+class InquiryUpdate(BaseModel):
+    date: Optional[date] = None
+    student_name: Optional[str] = None
+    course_interested: Optional[str] = None
+    student_phone: Optional[str] = None
+    parent_phone: Optional[str] = None
+    mode: Optional[str] = None
+    attended_by: Optional[str] = None
+    negotiated_amount: Optional[float] = None
+    referral_source: Optional[str] = None
+    remarks: Optional[str] = None
+    custom_remark: Optional[str] = None
+    status: Optional[str] = None
+
+class FollowUpCreate(BaseModel):
+    date: date
+    notes: Optional[str] = None
+    outcome: Optional[str] = None
+    next_followup_date: Optional[date] = None
+    created_by: Optional[str] = None
+
+class BulkSMSRequest(BaseModel):
+    inquiry_ids: List[int]
+    template_id: Optional[str] = None
+    message_vars: Optional[str] = None          # pipe-separated variables override
+
+def _inquiry_dict(inq, follow_ups=None):
+    d = {
+        "id": inq.id,
+        "date": str(inq.date),
+        "student_name": inq.student_name,
+        "course_interested": inq.course_interested,
+        "student_phone": inq.student_phone,
+        "parent_phone": inq.parent_phone,
+        "mode": inq.mode,
+        "attended_by": inq.attended_by,
+        "negotiated_amount": inq.negotiated_amount,
+        "referral_source": inq.referral_source,
+        "remarks": inq.remarks,
+        "custom_remark": inq.custom_remark,
+        "status": inq.status,
+        "admission_date": str(inq.admission_date) if inq.admission_date else None,
+        "created_at": inq.created_at,
+    }
+    if follow_ups is not None:
+        d["follow_ups"] = [
+            {
+                "id": f.id,
+                "date": str(f.date),
+                "notes": f.notes,
+                "outcome": f.outcome,
+                "next_followup_date": str(f.next_followup_date) if f.next_followup_date else None,
+                "created_by": f.created_by,
+                "created_at": f.created_at,
+            }
+            for f in sorted(follow_ups, key=lambda x: x.date)
+        ]
+    return d
+
+# Create inquiry
+@app.post("/inquiries")
+def create_inquiry(data: InquiryCreate, db: Session = Depends(get_db), user: dict = Depends(require_roles(["admin", "staff"]))):
+    inq = InquiryDB(
+        date=data.date,
+        student_name=data.student_name.strip(),
+        course_interested=data.course_interested,
+        student_phone=data.student_phone,
+        parent_phone=data.parent_phone,
+        mode=data.mode,
+        attended_by=data.attended_by or user["username"],
+        negotiated_amount=data.negotiated_amount,
+        referral_source=data.referral_source,
+        remarks=data.remarks,
+        custom_remark=data.custom_remark,
+        status=data.status or "inquiry",
+        created_at=datetime.now(IST).isoformat(),
+    )
+    db.add(inq)
+    db.commit()
+    db.refresh(inq)
+    return {"message": "Inquiry created", "inquiry": _inquiry_dict(inq)}
+
+# List inquiries with filters
+@app.get("/inquiries")
+def list_inquiries(
+    status: Optional[str] = None,
+    course: Optional[str] = None,
+    mode: Optional[str] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_roles(["admin", "staff"])),
+):
+    q = db.query(InquiryDB)
+    if status:     q = q.filter(InquiryDB.status == status)
+    if course:     q = q.filter(InquiryDB.course_interested == course)
+    if mode:       q = q.filter(InquiryDB.mode == mode)
+    if date_from:  q = q.filter(InquiryDB.date >= date_from)
+    if date_to:    q = q.filter(InquiryDB.date <= date_to)
+    inquiries = q.order_by(InquiryDB.date.desc()).all()
+    return {"inquiries": [_inquiry_dict(i) for i in inquiries]}
+
+# Get single inquiry with follow-ups
+@app.get("/inquiries/{inquiry_id}")
+def get_inquiry(inquiry_id: int, db: Session = Depends(get_db), user: dict = Depends(require_roles(["admin", "staff"]))):
+    inq = db.query(InquiryDB).filter(InquiryDB.id == inquiry_id).first()
+    if not inq:
+        raise HTTPException(status_code=404, detail="Inquiry not found")
+    fups = db.query(InquiryFollowUpDB).filter(InquiryFollowUpDB.inquiry_id == inquiry_id).all()
+    return {"inquiry": _inquiry_dict(inq, fups)}
+
+# Update inquiry
+@app.put("/inquiries/{inquiry_id}")
+def update_inquiry(inquiry_id: int, data: InquiryUpdate, db: Session = Depends(get_db), user: dict = Depends(require_roles(["admin", "staff"]))):
+    inq = db.query(InquiryDB).filter(InquiryDB.id == inquiry_id).first()
+    if not inq:
+        raise HTTPException(status_code=404, detail="Inquiry not found")
+    for field, val in data.dict(exclude_none=True).items():
+        setattr(inq, field, val)
+    db.commit()
+    db.refresh(inq)
+    return {"message": "Updated", "inquiry": _inquiry_dict(inq)}
+
+# Delete inquiry
+@app.delete("/inquiries/{inquiry_id}")
+def delete_inquiry(inquiry_id: int, db: Session = Depends(get_db), user: dict = Depends(require_roles(["admin", "staff"]))):
+    inq = db.query(InquiryDB).filter(InquiryDB.id == inquiry_id).first()
+    if not inq:
+        raise HTTPException(status_code=404, detail="Inquiry not found")
+    db.delete(inq)
+    db.commit()
+    return {"message": "Deleted"}
+
+# Mark as admitted
+@app.post("/inquiries/{inquiry_id}/admit")
+def admit_inquiry(inquiry_id: int, db: Session = Depends(get_db), user: dict = Depends(require_roles(["admin", "staff"]))):
+    inq = db.query(InquiryDB).filter(InquiryDB.id == inquiry_id).first()
+    if not inq:
+        raise HTTPException(status_code=404, detail="Inquiry not found")
+    inq.status = "admitted"
+    inq.admission_date = date.today()
+    db.commit()
+    db.refresh(inq)
+    return {"message": "Marked as admitted", "inquiry": _inquiry_dict(inq)}
+
+# Add follow-up note
+@app.post("/inquiries/{inquiry_id}/followup")
+def add_followup(inquiry_id: int, data: FollowUpCreate, db: Session = Depends(get_db), user: dict = Depends(require_roles(["admin", "staff"]))):
+    inq = db.query(InquiryDB).filter(InquiryDB.id == inquiry_id).first()
+    if not inq:
+        raise HTTPException(status_code=404, detail="Inquiry not found")
+    fup = InquiryFollowUpDB(
+        inquiry_id=inquiry_id,
+        date=data.date,
+        notes=data.notes,
+        outcome=data.outcome,
+        next_followup_date=data.next_followup_date,
+        created_by=data.created_by or user["username"],
+        created_at=datetime.now(IST).isoformat(),
+    )
+    # Update inquiry status if outcome is meaningful
+    if data.outcome == "not_interested":
+        inq.status = "not_interested"
+    elif data.outcome in ("interested", "demo_scheduled", "call_back") and inq.status == "inquiry":
+        inq.status = "inquiry"
+    db.add(fup)
+    db.commit()
+    db.refresh(fup)
+    return {"message": "Follow-up added"}
+
+# Pending follow-ups — inquiries with no contact in 2+ days, status not closed
+@app.get("/inquiries/pending/followup")
+def pending_followups(db: Session = Depends(get_db), user: dict = Depends(require_roles(["admin", "staff"]))):
+    cutoff = date.today() - timedelta(days=2)
+    active_statuses = ["inquiry", "interested", "demo_requested"]
+    all_active = db.query(InquiryDB).filter(InquiryDB.status.in_(active_statuses)).all()
+
+    result = []
+    for inq in all_active:
+        # Find last contact date: max of inquiry date and latest follow-up date
+        fups = db.query(InquiryFollowUpDB).filter(InquiryFollowUpDB.inquiry_id == inq.id).all()
+        last_contact = inq.date
+        for f in fups:
+            if f.date > last_contact:
+                last_contact = f.date
+        if last_contact <= cutoff:
+            d = _inquiry_dict(inq)
+            d["last_contact"] = str(last_contact)
+            d["days_since_contact"] = (date.today() - last_contact).days
+            result.append(d)
+
+    result.sort(key=lambda x: x["days_since_contact"], reverse=True)
+    return {"pending": result}
+
+# Inquiry stats
+@app.get("/inquiries/stats/summary")
+def inquiry_stats(db: Session = Depends(get_db), user: dict = Depends(require_roles(["admin", "staff"]))):
+    all_inq = db.query(InquiryDB).all()
+    total     = len(all_inq)
+    admitted  = sum(1 for i in all_inq if i.status == "admitted")
+    not_int   = sum(1 for i in all_inq if i.status == "not_interested")
+    active    = total - admitted - not_int
+    conv_pct  = round((admitted / total * 100), 1) if total > 0 else 0
+
+    by_mode   = {}
+    by_course = {}
+    by_month  = {}
+    for inq in all_inq:
+        m = inq.mode or "unknown"
+        by_mode[m] = by_mode.get(m, 0) + 1
+        c = inq.course_interested or "Not specified"
+        by_course[c] = by_course.get(c, 0) + 1
+        month_key = inq.date.strftime("%b %Y") if inq.date else "Unknown"
+        by_month[month_key] = by_month.get(month_key, 0) + 1
+
+    return {
+        "total": total,
+        "admitted": admitted,
+        "not_interested": not_int,
+        "active": active,
+        "conversion_pct": conv_pct,
+        "by_mode": by_mode,
+        "by_course": by_course,
+        "by_month": by_month,
+    }
+
+# Bulk SMS to pending follow-up students
+@app.post("/inquiries/bulk-sms")
+async def inquiry_bulk_sms(
+    data: BulkSMSRequest,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_roles(["admin", "staff"]))
+):
+    DLT_INQUIRY_TEMPLATE_ID = os.getenv("DLT_INQUIRY_TEMPLATE_ID", "")
+    tid = data.template_id or DLT_INQUIRY_TEMPLATE_ID
+    if not tid:
+        raise HTTPException(status_code=400, detail="DLT_INQUIRY_TEMPLATE_ID not set. Add it in Render environment variables.")
+
+    inquiries = db.query(InquiryDB).filter(InquiryDB.id.in_(data.inquiry_ids)).all()
+    sent = 0; failed = 0
+    for inq in inquiries:
+        phones = [p for p in [inq.student_phone, inq.parent_phone] if p]
+        vars_val = data.message_vars or (inq.course_interested or "our course")
+        for phone in phones:
+            ok = await send_sms(phone, vars_val, template_id=tid)
+            if ok: sent += 1
+            else:  failed += 1
+    return {"sent": sent, "failed": failed, "message": f"SMS sent to {sent} numbers"}
 
 
 # ----------------------------------------------------------------------------------------------------

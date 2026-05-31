@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, Date, Float, ForeignKey, UniqueConstraint, Text, Boolean
+from sqlalchemy import Column, Integer, String, Date, Float, ForeignKey, UniqueConstraint, Text, Boolean, DateTime
 from database import Base
+from datetime import datetime
 
 
 class StudentDB(Base):
@@ -199,3 +200,34 @@ class NoticeReadDB(Base):
     notice_id = Column(Integer, ForeignKey("notices.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     read_at = Column(String(50), nullable=False)
+
+
+class InquiryDB(Base):
+    __tablename__ = "inquiries"
+    id                 = Column(Integer, primary_key=True, index=True)
+    date               = Column(Date, nullable=False)
+    student_name       = Column(String(200), nullable=False)
+    course_interested  = Column(String(200), nullable=True)
+    student_phone      = Column(String(50),  nullable=True)
+    parent_phone       = Column(String(50),  nullable=True)
+    mode               = Column(String(20),  nullable=False)   # 'phone' | 'walk_in'
+    attended_by        = Column(String(200), nullable=True)
+    negotiated_amount  = Column(Float,       nullable=True)
+    referral_source    = Column(String(200), nullable=True)
+    remarks            = Column(String(50),  nullable=True)    # 'interested' | 'not_interested' | 'demo_requested' | 'other'
+    custom_remark      = Column(Text,        nullable=True)
+    status             = Column(String(20),  default="inquiry") # 'inquiry' | 'admitted' | 'not_interested'
+    admission_date     = Column(Date,        nullable=True)
+    created_at         = Column(String(50),  nullable=True)
+
+
+class InquiryFollowUpDB(Base):
+    __tablename__ = "inquiry_followups"
+    id                 = Column(Integer, primary_key=True, index=True)
+    inquiry_id         = Column(Integer, ForeignKey("inquiries.id", ondelete="CASCADE"), nullable=False)
+    date               = Column(Date,   nullable=False)
+    notes              = Column(Text,   nullable=True)
+    outcome            = Column(String(50), nullable=True)  # 'interested' | 'not_interested' | 'demo_scheduled' | 'call_back'
+    next_followup_date = Column(Date,   nullable=True)
+    created_by         = Column(String(200), nullable=True)
+    created_at         = Column(String(50),  nullable=True)

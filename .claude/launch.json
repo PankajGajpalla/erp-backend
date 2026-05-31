@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ckc-site",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "C:\\Users\\hp.1\\Desktop\\CKC_website", "-l", "3500"],
+      "port": 3500
+    }
+  ]
+}
