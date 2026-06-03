@@ -1110,7 +1110,7 @@ def set_additional_courses(
     student_id: int,
     data: StudentAdditionalCoursesUpdate,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_role("admin"))
+    user: dict = Depends(require_roles(["admin", "staff"]))
 ):
     student = db.query(StudentDB).filter(StudentDB.id == student_id).first()
     if not student:
