@@ -132,6 +132,7 @@ def run_migrations():
         "ALTER TABLE attendance DROP CONSTRAINT IF EXISTS unique_student_date",
         "ALTER TABLE attendance DROP CONSTRAINT IF EXISTS unique_student_date_subject",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS test_title VARCHAR(200)",
+        "ALTER TABLE grades ADD COLUMN IF NOT EXISTS test_date DATE",
         "ALTER TABLE students DROP COLUMN IF EXISTS age",
         "ALTER TABLE students DROP COLUMN IF EXISTS address",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS student_code VARCHAR(20)",
@@ -2045,13 +2046,25 @@ async def add_grade(
     percentage = (grade.marks / grade.total_marks) * 100
     g = "A+" if percentage >= 90 else "A" if percentage >= 80 else "B" if percentage >= 70 else "C" if percentage >= 60 else "D" if percentage >= 50 else "F"
 
+    # Parse DD-MM-YYYY → date object
+    test_date_obj = None
+    if grade.test_date:
+        try:
+            parts = grade.test_date.split("-")
+            if len(parts) == 3:
+                from datetime import date as _date
+                test_date_obj = _date(int(parts[2]), int(parts[1]), int(parts[0]))
+        except Exception:
+            pass
+
     new_grade = GradeDB(
         student_id=grade.student_id,
         subject=grade.subject,
         marks=grade.marks,
         total_marks=grade.total_marks,
         grade=g,
-        test_title=grade.test_title
+        test_title=grade.test_title,
+        test_date=test_date_obj,
     )
     db.add(new_grade)
     db.commit()
