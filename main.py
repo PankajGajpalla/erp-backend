@@ -428,7 +428,8 @@ class GradeCreate(BaseModel):
     total_marks: float
     test_title: Optional[str] = None
     test_date: Optional[str] = None   # DD-MM-YYYY, used in SMS to parent
-
+    is_absent: Optional[bool] = False
+    
 class TimetableCreate(BaseModel):
     course_id: int
     day: str
@@ -1469,8 +1470,9 @@ async def mark_attendance_bulk(
                 status=record.status,
             ))
             marked += 1
-            # Collect student for SMS (batch query after commit)
-            students_to_sms.append(record)
+            # Only queue absent students for SMS — no SMS for present
+            if record.status == "absent":
+                students_to_sms.append(record)
 
     db.commit()
 
@@ -1485,8 +1487,7 @@ async def mark_attendance_bulk(
             if student and student.parent_phone:
                 # Template variables (pipe-separated) matching approved DLT template:
                 # {#VAR#1} = student name | {#VAR#2} = status | {#VAR#3} = date
-                status_str       = "PRESENT" if record.status == "present" else "ABSENT"
-                variables_values = f"{student.name}|{status_str}|{record.date}"
+                variables_values = f"{student.name}|ABSENT|{record.date}"
                 sent = await send_sms(student.parent_phone, variables_values)
                 if sent:
                     sms_sent += 1
