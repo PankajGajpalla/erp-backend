@@ -242,6 +242,7 @@ def run_migrations():
             created_by VARCHAR(200),
             created_at VARCHAR(50)
         )""",
+        "ALTER TABLE grades ADD COLUMN IF NOT EXISTS is_absent BOOLEAN DEFAULT FALSE",
     ]
     for sql in statements:
         try:
