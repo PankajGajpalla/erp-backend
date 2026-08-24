@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from database import SessionLocal, engine, Base
-from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB, StudentAdditionalCourseDB, FeeTemplateDB, ExamScheduleDB, AuditLogDB, NoticeReadDB, GrievanceDB, InquiryDB, InquiryFollowUpDB, TaskDB
+from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB, StudentAdditionalCourseDB, FeeTemplateDB, ExamScheduleDB, AuditLogDB, NoticeReadDB, GrievanceDB, InquiryDB, InquiryFollowUpDB, TaskDB, ExpenseDB
 from pydantic import BaseModel
 from fastapi import HTTPException
 from passlib.context import CryptContext
@@ -294,6 +294,16 @@ def run_migrations():
             created_at VARCHAR(50)
         )""",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS is_absent BOOLEAN DEFAULT FALSE",
+        """CREATE TABLE IF NOT EXISTS expenses (
+            id SERIAL PRIMARY KEY,
+            title VARCHAR(200) NOT NULL,
+            category VARCHAR(100) NOT NULL,
+            amount FLOAT NOT NULL,
+            date DATE NOT NULL,
+            description TEXT,
+            added_by VARCHAR(100) NOT NULL,
+            created_at VARCHAR(50) NOT NULL
+        )""",
         """CREATE TABLE IF NOT EXISTS tasks (
             id SERIAL PRIMARY KEY,
             title VARCHAR(200) NOT NULL,
@@ -3445,3 +3455,90 @@ def delete_task(task_id: int, db: Session = Depends(get_db), user: dict = Depend
         raise HTTPException(status_code=404, detail="Task not found")
     db.delete(task); db.commit()
     return {"message": "Task deleted"}
+
+
+# ── Expenses ──────────────────────────────────────────────────────────────────
+
+class ExpenseCreate(BaseModel):
+    title: str
+    category: str
+    amount: float
+    date: str
+    description: Optional[str] = None
+
+class ExpenseEdit(BaseModel):
+    title: Optional[str] = None
+    category: Optional[str] = None
+    amount: Optional[float] = None
+    date: Optional[str] = None
+    description: Optional[str] = None
+
+def _exp_dict(e: ExpenseDB) -> dict:
+    return {
+        "id": e.id, "title": e.title, "category": e.category,
+        "amount": e.amount, "date": str(e.date),
+        "description": e.description, "added_by": e.added_by, "created_at": e.created_at,
+    }
+
+@app.post("/expenses")
+def create_expense(data: ExpenseCreate, db: Session = Depends(get_db),
+                   user: dict = Depends(require_roles(["admin", "staff"]))):
+    exp = ExpenseDB(
+        title=data.title, category=data.category, amount=data.amount,
+        date=date.fromisoformat(data.date), description=data.description,
+        added_by=user["sub"], created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    db.add(exp); db.commit(); db.refresh(exp)
+    return {"expense": _exp_dict(exp)}
+
+@app.get("/expenses")
+def get_expenses(
+    category: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_roles(["admin", "staff"]))
+):
+    q = db.query(ExpenseDB)
+    if category:  q = q.filter(ExpenseDB.category == category)
+    if from_date: q = q.filter(ExpenseDB.date >= date.fromisoformat(from_date))
+    if to_date:   q = q.filter(ExpenseDB.date <= date.fromisoformat(to_date))
+    expenses = q.order_by(ExpenseDB.date.desc()).all()
+    return {"expenses": [_exp_dict(e) for e in expenses]}
+
+@app.get("/expenses/stats")
+def get_expense_stats(db: Session = Depends(get_db),
+                      user: dict = Depends(require_roles(["admin", "staff"]))):
+    expenses = db.query(ExpenseDB).all()
+    total = sum(e.amount for e in expenses)
+    by_category: dict = {}
+    by_month: dict = {}
+    for e in expenses:
+        by_category[e.category] = by_category.get(e.category, 0) + e.amount
+        month_key = str(e.date)[:7]  # YYYY-MM
+        by_month[month_key] = by_month.get(month_key, 0) + e.amount
+    # Sort month dict chronologically
+    by_month = dict(sorted(by_month.items()))
+    return {"total": round(total, 2), "by_category": {k: round(v, 2) for k, v in by_category.items()},
+            "by_month": {k: round(v, 2) for k, v in by_month.items()}, "count": len(expenses)}
+
+@app.put("/expenses/{expense_id}")
+def edit_expense(expense_id: int, data: ExpenseEdit, db: Session = Depends(get_db),
+                 user: dict = Depends(require_roles(["admin", "staff"]))):
+    exp = db.query(ExpenseDB).filter(ExpenseDB.id == expense_id).first()
+    if not exp: raise HTTPException(status_code=404, detail="Expense not found")
+    if data.title is not None:       exp.title = data.title
+    if data.category is not None:    exp.category = data.category
+    if data.amount is not None:      exp.amount = data.amount
+    if data.date is not None:        exp.date = date.fromisoformat(data.date)
+    if data.description is not None: exp.description = data.description
+    db.commit(); db.refresh(exp)
+    return {"expense": _exp_dict(exp)}
+
+@app.delete("/expenses/{expense_id}")
+def delete_expense(expense_id: int, db: Session = Depends(get_db),
+                   user: dict = Depends(require_role("admin"))):
+    exp = db.query(ExpenseDB).filter(ExpenseDB.id == expense_id).first()
+    if not exp: raise HTTPException(status_code=404, detail="Expense not found")
+    db.delete(exp); db.commit()
+    return {"message": "Expense deleted"}

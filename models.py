@@ -234,6 +234,18 @@ class InquiryFollowUpDB(Base):
     created_at         = Column(String(50),  nullable=True)
 
 
+class ExpenseDB(Base):
+    __tablename__ = "expenses"
+    id          = Column(Integer, primary_key=True, index=True)
+    title       = Column(String(200), nullable=False)
+    category    = Column(String(100), nullable=False)
+    amount      = Column(Float,       nullable=False)
+    date        = Column(Date,        nullable=False)
+    description = Column(Text,        nullable=True)
+    added_by    = Column(String(100), nullable=False)
+    created_at  = Column(String(50),  nullable=False)
+
+
 class TaskDB(Base):
     __tablename__ = "tasks"
     id               = Column(Integer, primary_key=True, index=True)
