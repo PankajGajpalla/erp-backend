@@ -232,3 +232,19 @@ class InquiryFollowUpDB(Base):
     next_followup_date = Column(Date,   nullable=True)
     created_by         = Column(String(200), nullable=True)
     created_at         = Column(String(50),  nullable=True)
+
+
+class TaskDB(Base):
+    __tablename__ = "tasks"
+    id               = Column(Integer, primary_key=True, index=True)
+    title            = Column(String(200), nullable=False)
+    description      = Column(Text,        nullable=True)
+    assigned_to      = Column(Integer, ForeignKey("users.id"), nullable=False)
+    assigned_to_name = Column(String(100), nullable=True)
+    assigned_by      = Column(String(100), nullable=False)
+    frequency        = Column(String(20),  default="one-time")  # one-time / daily / weekly / monthly
+    priority         = Column(String(10),  default="medium")    # low / medium / high
+    due_date         = Column(Date,        nullable=True)
+    status           = Column(String(20),  default="pending")   # pending / in_progress / completed
+    notes            = Column(Text,        nullable=True)        # completion note from employee
+    created_at       = Column(String(50),  nullable=False)

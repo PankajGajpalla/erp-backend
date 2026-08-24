@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from database import SessionLocal, engine, Base
-from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB, StudentAdditionalCourseDB, FeeTemplateDB, ExamScheduleDB, AuditLogDB, NoticeReadDB, GrievanceDB, InquiryDB, InquiryFollowUpDB
+from models import StudentDB, UserDB, AttendanceDB, FeesDB, FeePaymentDB, TeacherDB, NoticeDB, GradeDB, TimetableDB, CourseDB, SubjectDB, StudentAdditionalCourseDB, FeeTemplateDB, ExamScheduleDB, AuditLogDB, NoticeReadDB, GrievanceDB, InquiryDB, InquiryFollowUpDB, TaskDB
 from pydantic import BaseModel
 from fastapi import HTTPException
 from passlib.context import CryptContext
@@ -294,6 +294,20 @@ def run_migrations():
             created_at VARCHAR(50)
         )""",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS is_absent BOOLEAN DEFAULT FALSE",
+        """CREATE TABLE IF NOT EXISTS tasks (
+            id SERIAL PRIMARY KEY,
+            title VARCHAR(200) NOT NULL,
+            description TEXT,
+            assigned_to INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            assigned_to_name VARCHAR(100),
+            assigned_by VARCHAR(100) NOT NULL,
+            frequency VARCHAR(20) DEFAULT 'one-time',
+            priority VARCHAR(10) DEFAULT 'medium',
+            due_date DATE,
+            status VARCHAR(20) DEFAULT 'pending',
+            notes TEXT,
+            created_at VARCHAR(50) NOT NULL
+        )""",
     ]
     for sql in statements:
         try:
@@ -3309,3 +3323,125 @@ async def bulk_send_whatsapp_report(req: BulkReportRequest, db: Session = Depend
         except Exception as e:
             failed.append({"name": s.name, "reason": str(e)})
     return {"sent": sent, "failed": failed, "total": len(students)}
+
+
+# ── Task Delegation ───────────────────────────────────────────────────────────
+
+class TaskCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    assigned_to: int
+    frequency: str = "one-time"
+    priority: str = "medium"
+    due_date: Optional[str] = None
+
+class TaskEdit(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    assigned_to: Optional[int] = None
+    frequency: Optional[str] = None
+    priority: Optional[str] = None
+    due_date: Optional[str] = None
+
+class TaskStatusUpdate(BaseModel):
+    status: str
+    notes: Optional[str] = None
+
+def _task_dict(t: TaskDB) -> dict:
+    return {
+        "id": t.id, "title": t.title, "description": t.description,
+        "assigned_to": t.assigned_to, "assigned_to_name": t.assigned_to_name,
+        "assigned_by": t.assigned_by, "frequency": t.frequency,
+        "priority": t.priority, "due_date": str(t.due_date) if t.due_date else None,
+        "status": t.status, "notes": t.notes, "created_at": t.created_at,
+    }
+
+@app.get("/users/employees")
+def get_employees(db: Session = Depends(get_db), user: dict = Depends(require_role("admin"))):
+    employees = db.query(UserDB).filter(UserDB.role.in_(["staff", "teacher"]), UserDB.is_hidden != True).all()
+    return {"employees": [{"id": e.id, "username": e.username, "role": e.role} for e in employees]}
+
+@app.post("/tasks")
+def create_task(data: TaskCreate, db: Session = Depends(get_db), user: dict = Depends(require_role("admin"))):
+    assignee = db.query(UserDB).filter(UserDB.id == data.assigned_to).first()
+    if not assignee:
+        raise HTTPException(status_code=404, detail="Assignee not found")
+    task = TaskDB(
+        title=data.title,
+        description=data.description,
+        assigned_to=data.assigned_to,
+        assigned_to_name=assignee.username,
+        assigned_by=user["sub"],
+        frequency=data.frequency,
+        priority=data.priority,
+        due_date=date.fromisoformat(data.due_date) if data.due_date else None,
+        status="pending",
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    db.add(task); db.commit(); db.refresh(task)
+    return {"task": _task_dict(task)}
+
+@app.get("/tasks")
+def get_all_tasks(
+    status: Optional[str] = None,
+    frequency: Optional[str] = None,
+    priority: Optional[str] = None,
+    assigned_to: Optional[int] = None,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin"))
+):
+    q = db.query(TaskDB)
+    if status:      q = q.filter(TaskDB.status == status)
+    if frequency:   q = q.filter(TaskDB.frequency == frequency)
+    if priority:    q = q.filter(TaskDB.priority == priority)
+    if assigned_to: q = q.filter(TaskDB.assigned_to == assigned_to)
+    tasks = q.order_by(TaskDB.created_at.desc()).all()
+    return {"tasks": [_task_dict(t) for t in tasks]}
+
+@app.get("/tasks/my")
+def get_my_tasks(db: Session = Depends(get_db), user: dict = Depends(require_roles(["staff", "teacher"]))):
+    u = db.query(UserDB).filter(UserDB.username == user["sub"]).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+    tasks = db.query(TaskDB).filter(TaskDB.assigned_to == u.id).order_by(TaskDB.created_at.desc()).all()
+    return {"tasks": [_task_dict(t) for t in tasks]}
+
+@app.put("/tasks/{task_id}")
+def edit_task(task_id: int, data: TaskEdit, db: Session = Depends(get_db), user: dict = Depends(require_role("admin"))):
+    task = db.query(TaskDB).filter(TaskDB.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if data.title is not None:       task.title = data.title
+    if data.description is not None: task.description = data.description
+    if data.frequency is not None:   task.frequency = data.frequency
+    if data.priority is not None:    task.priority = data.priority
+    if data.due_date is not None:
+        task.due_date = date.fromisoformat(data.due_date) if data.due_date else None
+    if data.assigned_to is not None:
+        assignee = db.query(UserDB).filter(UserDB.id == data.assigned_to).first()
+        if not assignee:
+            raise HTTPException(status_code=404, detail="Assignee not found")
+        task.assigned_to = data.assigned_to
+        task.assigned_to_name = assignee.username
+    db.commit(); db.refresh(task)
+    return {"task": _task_dict(task)}
+
+@app.patch("/tasks/{task_id}/status")
+def update_task_status(task_id: int, data: TaskStatusUpdate, db: Session = Depends(get_db),
+                       user: dict = Depends(require_roles(["staff", "teacher", "admin"]))):
+    task = db.query(TaskDB).filter(TaskDB.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    task.status = data.status
+    if data.notes is not None:
+        task.notes = data.notes
+    db.commit(); db.refresh(task)
+    return {"task": _task_dict(task)}
+
+@app.delete("/tasks/{task_id}")
+def delete_task(task_id: int, db: Session = Depends(get_db), user: dict = Depends(require_role("admin"))):
+    task = db.query(TaskDB).filter(TaskDB.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    db.delete(task); db.commit()
+    return {"message": "Task deleted"}
