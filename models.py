@@ -22,6 +22,17 @@ class StudentDB(Base):
     medium = Column(String(20), nullable=True)          # hindi / english
     admission_date = Column(Date, nullable=True)
     photo = Column(Text, nullable=True)                 # base64 image
+    # ── Fee Instalments ──────────────────────────────────────────
+    inst1_date   = Column(Date,  nullable=True)
+    inst1_amount = Column(Float, nullable=True)
+    inst2_date   = Column(Date,  nullable=True)
+    inst2_amount = Column(Float, nullable=True)
+    inst3_date   = Column(Date,  nullable=True)
+    inst3_amount = Column(Float, nullable=True)
+    inst4_date   = Column(Date,  nullable=True)
+    inst4_amount = Column(Float, nullable=True)
+    inst5_date   = Column(Date,  nullable=True)
+    inst5_amount = Column(Float, nullable=True)
 
 class CourseDB(Base):
     __tablename__ = "courses"

@@ -294,6 +294,16 @@ def run_migrations():
             created_at VARCHAR(50)
         )""",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS is_absent BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS inst1_date DATE",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS inst1_amount FLOAT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS inst2_date DATE",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS inst2_amount FLOAT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS inst3_date DATE",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS inst3_amount FLOAT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS inst4_date DATE",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS inst4_amount FLOAT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS inst5_date DATE",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS inst5_amount FLOAT",
         """CREATE TABLE IF NOT EXISTS expenses (
             id SERIAL PRIMARY KEY,
             title VARCHAR(200) NOT NULL,
@@ -451,6 +461,12 @@ class Student(BaseModel):
     medium: Optional[str] = None
     admission_date: Optional[date] = None
     photo: Optional[str] = None
+    # Fee instalments
+    inst1_date: Optional[date] = None;  inst1_amount: Optional[float] = None
+    inst2_date: Optional[date] = None;  inst2_amount: Optional[float] = None
+    inst3_date: Optional[date] = None;  inst3_amount: Optional[float] = None
+    inst4_date: Optional[date] = None;  inst4_amount: Optional[float] = None
+    inst5_date: Optional[date] = None;  inst5_amount: Optional[float] = None
 
 class StudentBulk(BaseModel):
     students: List[Student]
@@ -1048,6 +1064,11 @@ def add_student(
         medium=student.medium,
         admission_date=student.admission_date,
         photo=student.photo,
+        inst1_date=student.inst1_date, inst1_amount=student.inst1_amount,
+        inst2_date=student.inst2_date, inst2_amount=student.inst2_amount,
+        inst3_date=student.inst3_date, inst3_amount=student.inst3_amount,
+        inst4_date=student.inst4_date, inst4_amount=student.inst4_amount,
+        inst5_date=student.inst5_date, inst5_amount=student.inst5_amount,
     )
     db.add(new_student)
     db.flush()
@@ -1239,6 +1260,11 @@ def update_student(
     if updated_data.photo:
         student.photo = updated_data.photo
     student.address = updated_data.permanent_address
+    student.inst1_date = updated_data.inst1_date; student.inst1_amount = updated_data.inst1_amount
+    student.inst2_date = updated_data.inst2_date; student.inst2_amount = updated_data.inst2_amount
+    student.inst3_date = updated_data.inst3_date; student.inst3_amount = updated_data.inst3_amount
+    student.inst4_date = updated_data.inst4_date; student.inst4_amount = updated_data.inst4_amount
+    student.inst5_date = updated_data.inst5_date; student.inst5_amount = updated_data.inst5_amount
 
     if updated_data.fees is not None:
         fee_record = db.query(FeesDB).filter(FeesDB.student_id == student_id).first()
