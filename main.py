@@ -16,6 +16,57 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import httpx
 
+# ── WhatsApp Business API (Meta) ─────────────────────────────────────────────
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
+WHATSAPP_ACCESS_TOKEN    = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
+WHATSAPP_TEMPLATE_NAME   = os.getenv("WHATSAPP_TEMPLATE_NAME", "student_progress_report")
+
+def _clean_phone(phone: str) -> str:
+    p = phone.strip().replace(" ", "").replace("-", "").lstrip("+")
+    if p.startswith("0"):
+        p = "91" + p[1:]
+    elif not p.startswith("91"):
+        p = "91" + p
+    return p
+
+async def _send_whatsapp_template(phone: str, variables: list) -> dict:
+    if not WHATSAPP_PHONE_NUMBER_ID or not WHATSAPP_ACCESS_TOKEN:
+        raise HTTPException(status_code=500, detail="WhatsApp credentials not configured on server")
+    url = f"https://graph.facebook.com/v19.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": _clean_phone(phone),
+        "type": "template",
+        "template": {
+            "name": WHATSAPP_TEMPLATE_NAME,
+            "language": {"code": "en"},
+            "components": [{"type": "body", "parameters": [{"type": "text", "text": str(v)} for v in variables]}]
+        }
+    }
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(
+            url,
+            headers={"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}", "Content-Type": "application/json"},
+            json=payload
+        )
+    return resp.json()
+
+def _build_report(student_id: int, db: Session) -> dict:
+    student = db.query(StudentDB).filter(StudentDB.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    att = db.query(AttendanceDB).filter(AttendanceDB.student_id == student_id).all()
+    total_days   = len(att)
+    present_days = sum(1 for a in att if a.status == "present")
+    att_pct      = round(present_days / total_days * 100, 1) if total_days else 0
+    grades = db.query(GradeDB).filter(GradeDB.student_id == student_id, GradeDB.is_absent != True).all()
+    avg_pct = round(sum(g.marks / g.total_marks * 100 for g in grades) / len(grades), 1) if grades else 0
+    fees    = db.query(FeesDB).filter(FeesDB.student_id == student_id).all()
+    total_paid = round(sum(f.paid for f in fees))
+    pending    = round(sum(f.amount - f.paid for f in fees))
+    return dict(student=student, total_days=total_days, present_days=present_days,
+                att_pct=att_pct, avg_pct=avg_pct, total_paid=total_paid, pending=pending)
+
 # ── SMS / DLT configuration ───────────────────────────────────────────────────
 # Set these in your Render (or any hosting) environment variables.
 #
@@ -3199,3 +3250,62 @@ def export_payments(db: Session = Depends(get_db), user: dict = Depends(require_
          "Fee Total": fees[p.fee_id].amount if p.fee_id in fees else 0}
         for p in payments if p.fee_id in fees
     ]}
+
+
+# ── Student WhatsApp Reports ──────────────────────────────────────────────────
+
+@app.get("/students/{student_id}/report")
+def get_student_report(student_id: int, db: Session = Depends(get_db),
+                       user: dict = Depends(require_roles(["admin", "staff"]))):
+    r = _build_report(student_id, db)
+    s = r["student"]
+    return {
+        "student_name": s.name,
+        "course": s.course,
+        "parent_phone": s.parent_phone,
+        "attendance": {"present": r["present_days"], "total": r["total_days"], "percentage": r["att_pct"]},
+        "grades":     {"average_percentage": r["avg_pct"]},
+        "fees":       {"paid": r["total_paid"], "pending": r["pending"]},
+    }
+
+
+@app.post("/students/{student_id}/send-whatsapp-report")
+async def send_student_whatsapp_report(student_id: int, db: Session = Depends(get_db),
+                                       user: dict = Depends(require_roles(["admin", "staff"]))):
+    r = _build_report(student_id, db)
+    s = r["student"]
+    if not s.parent_phone:
+        raise HTTPException(status_code=400, detail="No parent phone number on record for this student")
+    variables = [s.name, s.course or "N/A", str(r["present_days"]), str(r["total_days"]),
+                 str(r["att_pct"]), str(r["avg_pct"]), str(r["total_paid"]), str(r["pending"])]
+    result = await _send_whatsapp_template(s.parent_phone, variables)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"].get("message", "WhatsApp send failed"))
+    return {"success": True, "message": f"Report sent to {s.parent_phone}"}
+
+
+class BulkReportRequest(BaseModel):
+    course: str
+
+@app.post("/students/bulk-send-whatsapp-report")
+async def bulk_send_whatsapp_report(req: BulkReportRequest, db: Session = Depends(get_db),
+                                    user: dict = Depends(require_role("admin"))):
+    students = db.query(StudentDB).filter(StudentDB.course == req.course).all()
+    if not students:
+        raise HTTPException(status_code=404, detail="No students found for this course")
+    sent, failed = 0, []
+    for s in students:
+        if not s.parent_phone:
+            failed.append({"name": s.name, "reason": "No parent phone"}); continue
+        try:
+            r = _build_report(s.id, db)
+            variables = [s.name, s.course or "N/A", str(r["present_days"]), str(r["total_days"]),
+                         str(r["att_pct"]), str(r["avg_pct"]), str(r["total_paid"]), str(r["pending"])]
+            result = await _send_whatsapp_template(s.parent_phone, variables)
+            if "error" in result:
+                failed.append({"name": s.name, "reason": result["error"].get("message", "Failed")})
+            else:
+                sent += 1
+        except Exception as e:
+            failed.append({"name": s.name, "reason": str(e)})
+    return {"sent": sent, "failed": failed, "total": len(students)}
