@@ -1134,6 +1134,11 @@ def _student_dict_from_map(s, ac_map: dict):
         "medium": s.medium,
         "admission_date": str(s.admission_date) if s.admission_date else None,
         "photo": s.photo,
+        "inst1_date": str(s.inst1_date) if s.inst1_date else None, "inst1_amount": s.inst1_amount,
+        "inst2_date": str(s.inst2_date) if s.inst2_date else None, "inst2_amount": s.inst2_amount,
+        "inst3_date": str(s.inst3_date) if s.inst3_date else None, "inst3_amount": s.inst3_amount,
+        "inst4_date": str(s.inst4_date) if s.inst4_date else None, "inst4_amount": s.inst4_amount,
+        "inst5_date": str(s.inst5_date) if s.inst5_date else None, "inst5_amount": s.inst5_amount,
         "additional_courses": ac_map.get(s.id, []),
     }
 
