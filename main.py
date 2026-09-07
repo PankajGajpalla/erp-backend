@@ -3412,7 +3412,7 @@ def create_task(data: TaskCreate, db: Session = Depends(get_db), user: dict = De
         description=data.description,
         assigned_to=data.assigned_to,
         assigned_to_name=assignee.username,
-        assigned_by=user["sub"],
+        assigned_by=user["username"],
         frequency=data.frequency,
         priority=data.priority,
         due_date=date.fromisoformat(data.due_date) if data.due_date else None,
@@ -3441,7 +3441,7 @@ def get_all_tasks(
 
 @app.get("/tasks/my")
 def get_my_tasks(db: Session = Depends(get_db), user: dict = Depends(require_roles(["staff", "teacher"]))):
-    u = db.query(UserDB).filter(UserDB.username == user["sub"]).first()
+    u = db.query(UserDB).filter(UserDB.username == user["username"]).first()
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
     tasks = db.query(TaskDB).filter(TaskDB.assigned_to == u.id).order_by(TaskDB.created_at.desc()).all()
@@ -3517,7 +3517,7 @@ def create_expense(data: ExpenseCreate, db: Session = Depends(get_db),
     exp = ExpenseDB(
         title=data.title, category=data.category, amount=data.amount,
         date=date.fromisoformat(data.date), description=data.description,
-        added_by=user["sub"], created_at=datetime.now(timezone.utc).isoformat(),
+        added_by=user["username"], created_at=datetime.now(timezone.utc).isoformat(),
     )
     db.add(exp); db.commit(); db.refresh(exp)
     return {"expense": _exp_dict(exp)}
