@@ -3568,7 +3568,7 @@ def edit_expense(expense_id: int, data: ExpenseEdit, db: Session = Depends(get_d
 
 @app.delete("/expenses/{expense_id}")
 def delete_expense(expense_id: int, db: Session = Depends(get_db),
-                   user: dict = Depends(require_role("admin"))):
+                   user: dict = Depends(require_roles(["admin", "staff"]))):
     exp = db.query(ExpenseDB).filter(ExpenseDB.id == expense_id).first()
     if not exp: raise HTTPException(status_code=404, detail="Expense not found")
     db.delete(exp); db.commit()
