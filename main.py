@@ -8,6 +8,9 @@ from fastapi import HTTPException
 from passlib.context import CryptContext
 import os
 from datetime import date, datetime, timedelta, timezone
+# Pydantic models with a field literally named "date" plus a default shadow the `date`
+# type inside the class body (it resolves to Optional[None]). Annotate those with DateType.
+DateType = date
 from jose import JWTError, jwt
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Literal, Optional, List
@@ -532,7 +535,7 @@ class TimetableCreate(BaseModel):
 class NoticeCreate(BaseModel):
     title: str
     content: str
-    date: Optional[date] = None
+    date: Optional[DateType] = None
     course: Optional[str] = None   # null = all courses
 
 class CourseCreate(BaseModel):
@@ -2995,7 +2998,7 @@ class InquiryCreate(BaseModel):
     status: Optional[str] = "inquiry"
 
 class InquiryUpdate(BaseModel):
-    date: Optional[date] = None
+    date: Optional[DateType] = None
     student_name: Optional[str] = None
     course_interested: Optional[str] = None
     student_phone: Optional[str] = None
